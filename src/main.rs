@@ -4,17 +4,15 @@ use std::sync::Arc;
 
 use clap::Parser;
 
-use futures::stream::StreamExt;
 use kiwi::config::Config;
-use kiwi::topic::TopicBroadcastChannel;
 use nanoid::nanoid;
 
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::stream_consumer::StreamConsumer;
-use rdkafka::consumer::Consumer;
-use rdkafka::message::{Message, OwnedMessage};
+use rdkafka::message::OwnedMessage;
 
-/// TODO
+/// kiwi is a bridge between your backend services and front-end applications.
+/// It seamlessly and efficiently manages the flow of real-time Kafka events
+/// through WebSockets, ensuring that your applications stay reactive and up-to-date
+/// with the latest data.
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -36,6 +34,18 @@ async fn main() -> anyhow::Result<()> {
 
     let mut config = Config::parse(&args.config)?;
 
+    let topic_senders = Arc::new(
+        config
+            .topics()
+            .iter()
+            .map(|topic| {
+                let (tx, _) = tokio::sync::broadcast::channel::<OwnedMessage>(100);
+
+                (topic.name.to_owned(), tx)
+            })
+            .collect::<HashMap<String, tokio::sync::broadcast::Sender<OwnedMessage>>>(),
+    );
+
     let group_id = format!("{}{}", config.consumer_group_prefix(), nanoid!());
 
     // Add necessary overrides here
@@ -43,59 +53,18 @@ async fn main() -> anyhow::Result<()> {
         .consumer_config_mut()
         .insert("group.id".into(), group_id);
 
-    let topic_broadcast_map = Arc::new(
-        config
-            .topics()
-            .iter()
-            .map(|topic| {
-                (
-                    topic.name.to_owned(),
-                    tokio::sync::broadcast::channel::<OwnedMessage>(100).into(),
-                )
-            })
-            .collect::<HashMap<String, TopicBroadcastChannel<OwnedMessage>>>(),
-    );
+    let topics = config
+        .topics()
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect::<Vec<&str>>();
+
+    // TODO: Make worker count configurable
+    kiwi::kafka::start_consumers(10, &topics, &config.consumer().config, &topic_senders)?;
 
     let listen_addr: SocketAddr = config.server_addr().parse()?;
 
-    // Worker count
-    for _ in 0..10 {
-        let topic_broadcast_map: Arc<HashMap<String, TopicBroadcastChannel<OwnedMessage>>> =
-            Arc::clone(&topic_broadcast_map);
-        let mut client_config = ClientConfig::new();
-        client_config.extend(config.consumer().config.clone().into_iter());
-
-        let consumer: StreamConsumer = client_config.create()?;
-
-        consumer
-            .subscribe(
-                &config
-                    .topics()
-                    .iter()
-                    .map(|t| t.name.as_str())
-                    .collect::<Vec<&str>>(),
-            )
-            .expect("Can't subscribe to topics");
-
-        tokio::spawn(async move {
-            while let Some(e) = consumer.stream().next().await {
-                match e {
-                    Err(err) => {
-                        println!("Kafka error: {}", err);
-                    }
-                    Ok(borrowed_message) => {
-                        let owned = borrowed_message.detach();
-
-                        if let Some(bm) = topic_broadcast_map.get(owned.topic()) {
-                            bm.tx.send(owned).unwrap();
-                        }
-                    }
-                };
-            }
-        });
-    }
-
-    kiwi::server::serve(&listen_addr, topic_broadcast_map).await?;
+    kiwi::ws::serve(&listen_addr, topic_senders).await?;
 
     Ok(())
 }
