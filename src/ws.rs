@@ -1,11 +1,7 @@
 use std::borrow::Cow;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
-use base64::{
-    alphabet,
-    engine::{self, general_purpose},
-    Engine as _,
-};
+use base64::{engine::general_purpose, Engine as _};
 use futures::{FutureExt, SinkExt, StreamExt};
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message as _Message;
