@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WebSocket Example</title>
+  <title>Kiwi Example</title>
   <script>
     const wsUrl = 'ws://localhost:8000/websocket';
     let webSocket;
@@ -14,6 +14,7 @@
 
       webSocket.onopen = function (event) {
         console.log('Connection opened:', event);
+        webSocket.send(JSON.stringify({ type: 'SUBSCRIBE', topics: ['topic1'] }))
       };
 
       webSocket.onmessage = function (event) {

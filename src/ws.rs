@@ -1,38 +1,26 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
-use futures::stream::select_all::select_all;
-use futures::StreamExt;
+use base64::{
+    alphabet,
+    engine::{self, general_purpose},
+    Engine as _,
+};
+use futures::{FutureExt, SinkExt, StreamExt};
+use rdkafka::message::OwnedMessage;
+use rdkafka::Message as _Message;
+use tokio::net::TcpListener;
+use tokio::sync::broadcast::Sender;
+use tokio::sync::oneshot;
+
 use thiserror::Error;
-use tokio::sync::broadcast::{Receiver, Sender};
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::wrappers::BroadcastStream;
+
+use crate::ingest::IngestActor;
+
+use crate::message::{Command, Message};
+
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
-
-use crate::command::Command;
-use crate::topic::TopicBroadcastChannel;
-
-pub struct WSConnection<T> {
-    topic_map: Arc<HashMap<String, TopicBroadcastChannel<T>>>,
-    /// Subscriptions this connection currently maintains
-    subscriptions: HashMap<String, BroadcastStream<T>>,
-}
-
-#[derive(Debug)]
-/// Represents the current state of the connection task, defining what action
-/// it should next take. The states here are externally-driven, meaning external
-/// events cause state transitions. As a result, there is no starting state which
-/// may depart from the traditional concept of a state machine
-enum ConnectionTaskState<T> {
-    ProcessingCommand(Command),
-    PushingEvent(T),
-    Completed,
-    // Reporting metrics, etc.
-}
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMessage};
 
 #[derive(Debug, Error)]
 enum ConnectionError {
@@ -42,101 +30,129 @@ enum ConnectionError {
     CommandDeserialization(String),
 }
 
-enum Action<T> {
-    Command(Command),
-    Event(T),
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MessageData {
+    payload: Option<String>,
+    topic: String,
+    timestamp: Option<i64>,
+    partition: i32,
+    offset: i64,
 }
 
-impl<T: Clone + Send + 'static> WSConnection<T> {
-    pub fn new(topic_map: Arc<HashMap<String, TopicBroadcastChannel<T>>>) -> Self {
+impl From<OwnedMessage> for MessageData {
+    fn from(value: OwnedMessage) -> Self {
         Self {
-            topic_map,
-            subscriptions: Default::default(),
+            payload: value.payload().map(|p| general_purpose::STANDARD.encode(p)),
+            topic: value.topic().to_owned(),
+            timestamp: value.timestamp().to_millis(),
+            partition: value.partition(),
+            offset: value.offset(),
         }
     }
+}
 
-    /// Drives this connection to completion by consuming from the specified stream
-    pub async fn consume<S>(&mut self, cmd_stream: &mut WebSocketStream<S>) -> anyhow::Result<()>
-    where
-        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-    {
-        // loop {
-        //     let next_state = {
-        //         // Combine all the current subscriptions into a single stream
-        //         let mut combined = select_all(self.subscriptions.values_mut());
+/// Starts a WebSocket server with the specified configuration
+pub async fn serve<T>(
+    listen_addr: &SocketAddr,
+    topic_senders: Arc<HashMap<String, Sender<T>>>,
+) -> anyhow::Result<()>
+where
+    T: Clone + Send + 'static,
+    MessageData: From<T>,
+{
+    // TODO: Support TLS
+    let listener = TcpListener::bind(listen_addr).await?;
+    tracing::info!("Server started. Listening on: {}", listen_addr);
 
-        //         // It's important that we bias the select block towards the command stream
-        //         // Because event payload pushes are likely to occur much more frequently than
-        //         // commands, we want to ensure the polling of each stream remains fair.
-        //         tokio::select! {
-        //             biased;
+    while let Ok((stream, addr)) = listener.accept().await {
+        let topic_senders = Arc::clone(&topic_senders);
+        tokio::spawn(async move {
+            match tokio_tungstenite::accept_async(stream).await {
+                Ok(mut ws_stream) => {
+                    tracing::info!("New WebSocket connection: {}", addr);
 
-        //             msg = stream.next() => {
-        //                 match msg.transpose() {
-        //                     Ok(Some(Message::Text(text))) => {
-        //                         match serde_json::from_str::<Command>(&text) {
-        //                             Ok(cmd) => Ok(ConnectionTaskState::ProcessingCommand(cmd)),
-        //                             Err(_) => Err(ConnectionError::CommandDeserialization(text)),
-        //                         }
-        //                     },
-        //                     Ok(None) => Ok(ConnectionTaskState::Completed),
-        //                     Ok(_) => Err(ConnectionError::UnsupportedCommandForm),
-        //                     Err(e) => {
-        //                         tracing::error!("Received error while reading from WS stream: {:?}", e);
-        //                         break;
-        //                     }
-        //                 }
-        //             },
-        //             event = combined.next() => {
-        //                 match event.transpose() {
-        //                     Ok(Some(event)) => Action::Event(event),
-        //                     Ok(None) => continue,
-        //                     Err(e) => {
-        //                         match e {
-        //                             BroadcastStreamRecvError::Lagged(count) => {
-        //                                 tracing::warn!("WS Connection lagged behind by {} messages. Continuing to read from oldest available message", count);
-        //                                 continue;
-        //                             },
-        //                         }
-        //                     },
-        //                 }
-        //             }
-        //         }
-        //     };
+                    let (msg_tx, mut msg_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<Message<MessageData>>();
+                    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
+                    let (_shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+                    let shutdown_tripwire = shutdown_rx.fuse();
 
-        //     match action {
-        //         Action::Command(command) => self.handle_command(command),
-        //         Action::Event(_) => todo!(),
-        //     }
-        // }
+                    let actor = IngestActor::new(topic_senders, cmd_rx, msg_tx, shutdown_tripwire);
 
-        Ok(())
-    }
+                    tokio::spawn(actor.run());
 
-    fn handle_command(&mut self, command: Command) {
-        match command {
-            Command::Subscribe { topics } => {
-                let correct = topics
-                    .iter()
-                    .all(|topic| self.topic_map.contains_key(topic));
+                    loop {
+                        // It's important that we bias the select block towards the WebSocket stream
+                        // because message pushes are likely to occur much more frequently than
+                        // commands, and we want to ensure the polling of each future remains fair.
+                        tokio::select! {
+                            biased;
 
-                if correct {
-                    for topic in topics.into_iter() {
-                        let bm = self.topic_map.get(&topic).expect("known to exist");
+                            Some(protocol_msg) = ws_stream.next() => {
+                                match protocol_msg {
+                                    Ok(msg) => {
+                                        let cmd = match msg {
+                                            ProtocolMessage::Text(text) => {
+                                                match serde_json::from_str::<Command>(&text) {
+                                                    Ok(cmd) => Ok(cmd),
+                                                    Err(_) => Err(ConnectionError::CommandDeserialization(text)),
+                                                }
+                                            },
+                                            ProtocolMessage::Binary(_) => Err(ConnectionError::UnsupportedCommandForm),
+                                            // Handling of Ping/Close messages are delegated to tungstenite
+                                            _ => continue,
+                                        };
 
-                        self.subscriptions
-                            .entry(topic)
-                            .or_insert(BroadcastStream::new(bm.subscribe()));
+                                        match cmd {
+                                            Ok(cmd) => {
+                                                if let Err(_) = cmd_tx.send(cmd) {
+                                                    // If the send failed, the channel is closed
+                                                    // thus we should terminate the connection
+                                                    break;
+                                                }
+                                            },
+                                            Err(e) => {
+                                                let close_frame = CloseFrame {
+                                                    code: CloseCode::Unsupported,
+                                                    reason: Cow::from(e.to_string()),
+                                                };
+
+                                                if let Err(e) = ws_stream.close(Some(close_frame)).await {
+                                                    tracing::error!("Failed to gracefully close the WebSocket connection with error {}", e);
+                                                }
+
+                                                break;
+                                            },
+                                        }
+                                    },
+                                    Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => break,
+                                    Err(e) => {
+                                        tracing::error!("Encountered unexpected error while reading from WS stream: {}", e);
+                                        break;
+                                    }
+                                }
+                            },
+                            Some(msg) = msg_rx.recv() => {
+                                let txt = serde_json::to_string(&msg).expect("yeet");
+
+                                if let Err(e) = ws_stream.send(ProtocolMessage::Text(txt)).await {
+                                    tracing::error!("Encountered unexpected error while writing to WS stream: {}", e);
+                                }
+                            },
+                            else => break,
+                        }
                     }
-                } else {
-                    // Send error response
+                }
+                Err(err) => {
+                    tracing::error!(
+                        "Error during websocket handshake occurred for client {}: {}",
+                        addr,
+                        err
+                    );
                 }
             }
-            Command::Unsubscribe { topics } => {
-                for topic in topics.into_iter() {
-                    let _ = self.subscriptions.remove(&topic);
-                }
-            }
-        }
+        });
     }
+
+    Ok(())
 }
