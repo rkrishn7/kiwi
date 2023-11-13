@@ -1,30 +1,23 @@
 use std::borrow::Cow;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::collections::BTreeMap;
+use std::{net::SocketAddr, sync::Arc};
 
 use base64::{engine::general_purpose, Engine as _};
 use futures::{FutureExt, SinkExt, StreamExt};
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message as _Message;
 use tokio::net::TcpListener;
-use tokio::sync::broadcast::Sender;
 use tokio::sync::oneshot;
 
-use thiserror::Error;
-
+use crate::event::MutableEvent;
 use crate::ingest::IngestActor;
 
-use crate::message::{Command, Message};
+use crate::plugin::{self, Plugin};
+use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
+use crate::source::Source;
 
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMessage};
-
-#[derive(Debug, Error)]
-enum ConnectionError {
-    #[error("Unsupported command form. Only UTF-8 encoded text is supported")]
-    UnsupportedCommandForm,
-    #[error("Encountered an error while deserializing the command payload {0}")]
-    CommandDeserialization(String),
-}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MessageData {
@@ -48,20 +41,28 @@ impl From<OwnedMessage> for MessageData {
 }
 
 /// Starts a WebSocket server with the specified configuration
-pub async fn serve<T>(
+pub async fn serve<S, M>(
     listen_addr: &SocketAddr,
-    topic_senders: Arc<HashMap<String, Sender<T>>>,
+    sources: Arc<BTreeMap<String, S>>,
+    pre_forward: Option<Plugin>,
 ) -> anyhow::Result<()>
 where
-    T: Clone + Send + 'static,
-    MessageData: From<T>,
+    S: Source<Message = M> + Sync + Send + 'static,
+    M: Into<plugin::types::EventCtx>
+        + Into<MessageData>
+        + MutableEvent
+        + std::fmt::Debug
+        + Clone
+        + Send
+        + 'static,
 {
     // TODO: Support TLS
     let listener = TcpListener::bind(listen_addr).await?;
     tracing::info!("Server started. Listening on: {}", listen_addr);
 
     while let Ok((stream, addr)) = listener.accept().await {
-        let topic_senders = Arc::clone(&topic_senders);
+        let sources = Arc::clone(&sources);
+        let pre_forward = pre_forward.clone();
         tokio::spawn(async move {
             match tokio_tungstenite::accept_async(stream).await {
                 Ok(mut ws_stream) => {
@@ -73,7 +74,19 @@ where
                     let (_shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
                     let shutdown_tripwire = shutdown_rx.fuse();
 
-                    let actor = IngestActor::new(topic_senders, cmd_rx, msg_tx, shutdown_tripwire);
+                    let ctx = plugin::types::ConnectionCtx::Websocket(plugin::types::Websocket {
+                        addr: Some(addr.to_string()),
+                        auth: None,
+                    });
+
+                    let actor = IngestActor::new(
+                        sources,
+                        cmd_rx,
+                        msg_tx,
+                        ctx,
+                        pre_forward,
+                        shutdown_tripwire,
+                    );
 
                     tokio::spawn(actor.run());
 
@@ -91,10 +104,10 @@ where
                                             ProtocolMessage::Text(text) => {
                                                 match serde_json::from_str::<Command>(&text) {
                                                     Ok(cmd) => Ok(cmd),
-                                                    Err(_) => Err(ConnectionError::CommandDeserialization(text)),
+                                                    Err(_) => Err(KiwiProtocolError::CommandDeserialization(text)),
                                                 }
                                             },
-                                            ProtocolMessage::Binary(_) => Err(ConnectionError::UnsupportedCommandForm),
+                                            ProtocolMessage::Binary(_) => Err(KiwiProtocolError::UnsupportedCommandForm),
                                             // Handling of Ping/Close messages are delegated to tungstenite
                                             _ => continue,
                                         };
@@ -131,6 +144,7 @@ where
                             Some(msg) = msg_rx.recv() => {
                                 let txt = serde_json::to_string(&msg).expect("yeet");
 
+                                // TODO: We don't want to use `send` here as it implies flushing
                                 if let Err(e) = ws_stream.send(ProtocolMessage::Text(txt)).await {
                                     tracing::error!("Encountered unexpected error while writing to WS stream: {}", e);
                                 }

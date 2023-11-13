@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::future::Fuse;
@@ -9,20 +10,24 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::message::{Command, Message, Notice};
+use crate::event::MutableEvent;
+use crate::plugin::{self, Plugin};
+use crate::protocol::{Command, Message, Notice};
+use crate::source::Source;
 
-#[derive(Debug)]
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
 /// - Reading events from subscribed topics, processing them, and
 ///   forwarding them along the specified outbound message channel
-pub struct IngestActor<T, M> {
+pub struct IngestActor<S, T, M> {
     cmd_rx: UnboundedReceiver<Command>,
     msg_tx: UnboundedSender<Message<M>>,
     shutdown_tripwire: Fuse<oneshot::Receiver<()>>,
-    topic_senders: Arc<HashMap<String, tokio::sync::broadcast::Sender<T>>>,
-    /// Subscriptions this connection currently maintains
+    sources: Arc<BTreeMap<String, S>>,
+    /// Subscriptions this actor currently maintains for its handle
     subscriptions: HashMap<String, BroadcastStream<T>>,
+    connection_ctx: plugin::types::ConnectionCtx,
+    pre_forward: Option<Plugin>,
 }
 
 #[derive(Debug)]
@@ -36,23 +41,28 @@ enum IngestActorState<T> {
     ProcessingLag(u64),
 }
 
-impl<T, M> IngestActor<T, M>
+impl<S, T, M> IngestActor<S, T, M>
 where
-    T: Clone + Send + 'static,
-    M: From<T> + Clone + Send + Sync + 'static,
+    M: Clone + Send + Sync + 'static,
+    S: Source<Message = T>,
+    T: Into<plugin::types::EventCtx> + Into<M> + MutableEvent + Debug + Clone + Send + 'static,
 {
     pub fn new(
-        topic_senders: Arc<HashMap<String, tokio::sync::broadcast::Sender<T>>>,
+        sources: Arc<BTreeMap<String, S>>,
         cmd_rx: UnboundedReceiver<Command>,
         msg_tx: UnboundedSender<Message<M>>,
+        connection_ctx: plugin::types::ConnectionCtx,
+        pre_forward: Option<Plugin>,
         shutdown_tripwire: Fuse<oneshot::Receiver<()>>,
     ) -> Self {
         Self {
             cmd_rx,
             msg_tx,
             shutdown_tripwire,
-            topic_senders,
+            sources,
+            connection_ctx,
             subscriptions: Default::default(),
+            pre_forward,
         }
     }
 
@@ -91,12 +101,12 @@ where
                     self.handle_command(cmd);
                 }
                 IngestActorState::ProcessingTopicEvent(event) => {
-                    if let Err(_) = self.forward_event(event) {
+                    if let Err(_) = self.forward_event(event).await {
                         tracing::error!("Error while forwarding topic event");
                     }
                 }
                 IngestActorState::ProcessingLag(count) => {
-                    tracing::warn!("WS Connection lagged behind by {} messages. Continuing to read from oldest available message", count);
+                    tracing::warn!("Actor lagged behind by {} messages. Continuing to read from oldest available message", count);
                     let topics = self.subscriptions.keys().cloned().collect::<Vec<_>>();
 
                     // If we fail to send the message, it means the receiving half of the message channel
@@ -117,17 +127,15 @@ where
     fn handle_command(&mut self, command: Command) {
         match command {
             Command::Subscribe { topics } => {
-                let correct = topics
-                    .iter()
-                    .all(|topic| self.topic_senders.contains_key(topic));
+                let correct = topics.iter().all(|topic| self.sources.contains_key(topic));
 
                 if correct {
                     for topic in topics.into_iter() {
-                        let tx = self.topic_senders.get(&topic).expect("known to exist");
+                        let source = self.sources.get(&topic).expect("known to exist");
 
                         self.subscriptions
                             .entry(topic)
-                            .or_insert(BroadcastStream::new(tx.subscribe()));
+                            .or_insert(BroadcastStream::new(source.subscribe()));
                     }
                 } else {
                     // Send error response
@@ -141,9 +149,32 @@ where
         }
     }
 
-    fn forward_event(&mut self, event: T) -> anyhow::Result<()> {
-        // TODO: Add filtering + transformation logic here
-        self.msg_tx.send(Message::Result(event.into()))?;
+    async fn forward_event(&mut self, event: T) -> anyhow::Result<()> {
+        let plugin_event_ctx: plugin::types::EventCtx = event.clone().into();
+        let plugin_ctx = plugin::types::Context {
+            connection: self.connection_ctx.clone(),
+            event: plugin_event_ctx,
+        };
+
+        let action = if let Some(plugin) = self.pre_forward.clone() {
+            let result = tokio::task::spawn_blocking(move || plugin.call(plugin_ctx)).await??;
+
+            Some(result)
+        } else {
+            None
+        };
+
+        match action {
+            Some(plugin::types::Action::Discard) => (),
+            None | Some(plugin::types::Action::Forward) => {
+                self.msg_tx.send(Message::Result(event.into()))?;
+            }
+            Some(plugin::types::Action::Transform(payload)) => {
+                let transformed = event.set_payload(payload);
+
+                self.msg_tx.send(Message::Result(transformed.into()))?;
+            }
+        }
 
         Ok(())
     }
