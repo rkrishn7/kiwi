@@ -16,7 +16,6 @@ use tokio::sync::{
 
 use crate::event::MutableEvent;
 use crate::plugin;
-use crate::util::macros::try_conv_bail;
 
 use super::{Source, SourceId};
 
@@ -157,21 +156,12 @@ impl KafkaTopicSource {
 
 impl From<OwnedMessage> for plugin::types::EventCtx {
     fn from(value: OwnedMessage) -> Self {
-        let timestamp: Option<u64> = value
-            .timestamp()
-            .to_millis()
-            .map(|m| try_conv_bail!(m, "timestamp should be coercible into u64"));
-        let partition: u32 =
-            try_conv_bail!(value.partition(), "partition should be coercible into u32");
-
-        let offset: u64 = try_conv_bail!(value.offset(), "offset should be coercible into u32");
-
         Self::Kafka(plugin::types::KafkaEventCtx {
             payload: value.payload().map(|p| p.to_owned()),
             topic: value.topic().to_string(),
-            timestamp,
-            partition,
-            offset,
+            timestamp: value.timestamp().to_millis(),
+            partition: value.partition(),
+            offset: value.offset(),
         })
     }
 }
