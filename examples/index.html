@@ -14,7 +14,7 @@
 
       webSocket.onopen = function (event) {
         console.log('Connection opened:', event);
-        webSocket.send(JSON.stringify({ type: 'SUBSCRIBE', topics: ['topic1'] }))
+        webSocket.send(JSON.stringify({ type: 'SUBSCRIBE', sources: ['topic1'] }))
       };
 
       webSocket.onmessage = function (event) {

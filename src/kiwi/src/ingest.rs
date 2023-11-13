@@ -12,20 +12,20 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::event::MutableEvent;
 use crate::plugin::{self, Plugin};
-use crate::protocol::{Command, Message, Notice};
-use crate::source::Source;
+use crate::protocol::{Command, CommandResponse, Message, Notice};
+use crate::source::{Source, SourceId};
 
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
-/// - Reading events from subscribed topics, processing them, and
-///   forwarding them along the specified outbound message channel
+/// - Reading events from subscribed sources, processing them, and
+///   forwarding them along its active subscriptions
 pub struct IngestActor<S, T, M> {
     cmd_rx: UnboundedReceiver<Command>,
     msg_tx: UnboundedSender<Message<M>>,
     shutdown_tripwire: Fuse<oneshot::Receiver<()>>,
-    sources: Arc<BTreeMap<String, S>>,
+    sources: Arc<BTreeMap<SourceId, S>>,
     /// Subscriptions this actor currently maintains for its handle
-    subscriptions: HashMap<String, BroadcastStream<T>>,
+    subscriptions: HashMap<SourceId, BroadcastStream<T>>,
     connection_ctx: plugin::types::ConnectionCtx,
     pre_forward: Option<Plugin>,
 }
@@ -36,9 +36,9 @@ pub struct IngestActor<S, T, M> {
 /// events cause state transitions. As a result, there is no starting state which
 /// may depart from the traditional concept of a state machine
 enum IngestActorState<T> {
-    ProcessingCommand(Command),
-    ProcessingTopicEvent(T),
-    ProcessingLag(u64),
+    ReceivedCommand(Command),
+    ReceivedSourceEvent(T),
+    Lagged((SourceId, u64)),
 }
 
 impl<S, T, M> IngestActor<S, T, M>
@@ -71,7 +71,10 @@ where
         loop {
             let next_state = {
                 // Combine all the current subscriptions into a single stream
-                let mut combined = select_all(self.subscriptions.values_mut());
+                let mut combined =
+                    select_all(self.subscriptions.iter_mut().map(|(source_id, stream)| {
+                        crate::util::stream::with_id(source_id, stream)
+                    }));
 
                 tokio::select! {
                     biased;
@@ -79,42 +82,46 @@ where
                     _ = &mut self.shutdown_tripwire => break,
                     maybe_cmd = self.cmd_rx.recv() => {
                         match maybe_cmd {
-                            Some(cmd) => IngestActorState::ProcessingCommand(cmd),
+                            Some(cmd) => IngestActorState::ReceivedCommand(cmd),
                             None => break,
                         }
                     },
                     event = combined.next() => {
-                        match event.transpose() {
-                            Ok(Some(event)) => IngestActorState::ProcessingTopicEvent(event),
+                        match event {
+                            Some((source_id, res)) => {
+                                match res {
+                                    Ok(event) => IngestActorState::ReceivedSourceEvent(event),
+                                    Err(BroadcastStreamRecvError::Lagged(count)) => IngestActorState::Lagged((source_id.clone(), count))
+                                }
+                            },
                             // Since the stream combinator is re-computed on each iteration, receiving
                             // `None` does not signal we are done. It is very possible that the actor
                             // handle later signals to add a new subscription via `cmd_tx`
-                            Ok(None) => continue,
-                            Err(BroadcastStreamRecvError::Lagged(count)) => IngestActorState::ProcessingLag(count),
+                            None => continue,
                         }
                     }
                 }
             };
 
             match next_state {
-                IngestActorState::ProcessingCommand(cmd) => {
-                    self.handle_command(cmd);
+                IngestActorState::ReceivedCommand(cmd) => {
+                    // TODO: we should probably abort the connection if we fail to handle a command
+                    let _ = self.handle_command(cmd);
                 }
-                IngestActorState::ProcessingTopicEvent(event) => {
+                IngestActorState::ReceivedSourceEvent(event) => {
                     if let Err(_) = self.forward_event(event).await {
-                        tracing::error!("Error while forwarding topic event");
+                        tracing::error!("Error while forwarding source event");
                     }
                 }
-                IngestActorState::ProcessingLag(count) => {
-                    tracing::warn!("Actor lagged behind by {} messages. Continuing to read from oldest available message", count);
-                    let topics = self.subscriptions.keys().cloned().collect::<Vec<_>>();
+                IngestActorState::Lagged((source_id, count)) => {
+                    tracing::warn!("Actor lagged behind by {} messages for source {}. Continuing to read from oldest available message", count, source_id);
 
                     // If we fail to send the message, it means the receiving half of the message channel
                     // was dropped, in which case we want to complete execution
-                    if let Err(_) = self
-                        .msg_tx
-                        .send(Message::Notice(Notice::Lag { topics, count }))
-                    {
+                    if let Err(_) = self.msg_tx.send(Message::Notice(Notice::Lag {
+                        source: source_id,
+                        count,
+                    })) {
                         break;
                     }
                 }
@@ -124,29 +131,59 @@ where
         Ok(())
     }
 
-    fn handle_command(&mut self, command: Command) {
+    fn handle_command(&mut self, command: Command) -> anyhow::Result<()> {
         match command {
-            Command::Subscribe { topics } => {
-                let correct = topics.iter().all(|topic| self.sources.contains_key(topic));
+            Command::Subscribe { sources } => {
+                let sources_exist = sources.iter().all(|id| self.sources.contains_key(id));
 
-                if correct {
-                    for topic in topics.into_iter() {
-                        let source = self.sources.get(&topic).expect("known to exist");
+                if sources_exist {
+                    for source_id in sources.iter() {
+                        let source = self.sources.get(source_id).expect("known to exist");
 
                         self.subscriptions
-                            .entry(topic)
+                            .entry(source_id.clone())
                             .or_insert(BroadcastStream::new(source.subscribe()));
                     }
+
+                    self.msg_tx
+                        .send(Message::CommandResponse(CommandResponse::SubscribeOk {
+                            sources,
+                        }))?;
                 } else {
-                    // Send error response
+                    self.msg_tx.send(Message::CommandResponse(
+                        CommandResponse::SubscribeError {
+                            sources,
+                            error: "One or more source identifiers do not exist on this server"
+                                .to_string(),
+                        },
+                    ))?;
                 }
             }
-            Command::Unsubscribe { topics } => {
-                for topic in topics.into_iter() {
-                    let _ = self.subscriptions.remove(&topic);
+            Command::Unsubscribe { sources } => {
+                let sources_exist = sources.iter().all(|id| self.sources.contains_key(id));
+
+                if sources_exist {
+                    for source_id in sources.iter() {
+                        let _ = self.subscriptions.remove(source_id);
+                    }
+
+                    self.msg_tx
+                        .send(Message::CommandResponse(CommandResponse::UnsubscribeOk {
+                            sources,
+                        }))?;
+                } else {
+                    self.msg_tx.send(Message::CommandResponse(
+                        CommandResponse::UnsubscribeError {
+                            sources,
+                            error: "One or more source identifiers do not exist on this server"
+                                .to_string(),
+                        },
+                    ))?;
                 }
             }
         }
+
+        Ok(())
     }
 
     async fn forward_event(&mut self, event: T) -> anyhow::Result<()> {
