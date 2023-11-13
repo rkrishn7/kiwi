@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
@@ -8,6 +9,8 @@ pub enum Command {
     Subscribe { topics: Vec<String> },
     Unsubscribe { topics: Vec<String> },
 }
+
+pub enum CommandResponse {}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -25,4 +28,12 @@ pub enum Notice {
 pub enum Message<T> {
     Notice(Notice),
     Result(T),
+}
+
+#[derive(Debug, Error)]
+pub enum ProtocolError {
+    #[error("Unsupported command form. Only UTF-8 encoded text is supported")]
+    UnsupportedCommandForm,
+    #[error("Encountered an error while deserializing the command payload {0}")]
+    CommandDeserialization(String),
 }
