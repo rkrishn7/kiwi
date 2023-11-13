@@ -41,13 +41,13 @@ impl From<OwnedMessage> for MessageData {
 }
 
 /// Starts a WebSocket server with the specified configuration
-pub async fn serve<S, M>(
+pub async fn serve<S, M, P>(
     listen_addr: &SocketAddr,
     sources: Arc<BTreeMap<String, S>>,
-    pre_forward: Option<Plugin>,
+    pre_forward: Option<P>,
 ) -> anyhow::Result<()>
 where
-    S: Source<Message = M> + Sync + Send + 'static,
+    S: Source<Message = M> + Send + Sync + 'static,
     M: Into<plugin::types::EventCtx>
         + Into<MessageData>
         + MutableEvent
@@ -55,6 +55,7 @@ where
         + Clone
         + Send
         + 'static,
+    P: Plugin + Clone + Send + Sync + 'static,
 {
     // TODO: Support TLS
     let listener = TcpListener::bind(listen_addr).await?;
@@ -74,10 +75,10 @@ where
                     let (_shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
                     let shutdown_tripwire = shutdown_rx.fuse();
 
-                    let ctx = plugin::types::ConnectionCtx::Websocket(plugin::types::Websocket {
-                        addr: Some(addr.to_string()),
-                        auth: None,
-                    });
+                    // TODO: Build the proper connection context once we implement auth
+                    let ctx = plugin::types::ConnectionCtx::WebSocket(
+                        plugin::types::WebSocketConnectionCtx { addr, auth: None },
+                    );
 
                     let actor = IngestActor::new(
                         sources,

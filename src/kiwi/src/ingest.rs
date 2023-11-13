@@ -19,7 +19,7 @@ use crate::source::{Source, SourceId};
 /// - Processing commands as they become available
 /// - Reading events from subscribed sources, processing them, and
 ///   forwarding them along its active subscriptions
-pub struct IngestActor<S, T, M> {
+pub struct IngestActor<S, T, M, P> {
     cmd_rx: UnboundedReceiver<Command>,
     msg_tx: UnboundedSender<Message<M>>,
     shutdown_tripwire: Fuse<oneshot::Receiver<()>>,
@@ -27,7 +27,7 @@ pub struct IngestActor<S, T, M> {
     /// Subscriptions this actor currently maintains for its handle
     subscriptions: HashMap<SourceId, BroadcastStream<T>>,
     connection_ctx: plugin::types::ConnectionCtx,
-    pre_forward: Option<Plugin>,
+    pre_forward: Option<P>,
 }
 
 #[derive(Debug)]
@@ -41,18 +41,19 @@ enum IngestActorState<T> {
     Lagged((SourceId, u64)),
 }
 
-impl<S, T, M> IngestActor<S, T, M>
+impl<S, T, M, P> IngestActor<S, T, M, P>
 where
     M: Clone + Send + Sync + 'static,
     S: Source<Message = T>,
     T: Into<plugin::types::EventCtx> + Into<M> + MutableEvent + Debug + Clone + Send + 'static,
+    P: Plugin + Clone + Send + 'static,
 {
     pub fn new(
         sources: Arc<BTreeMap<String, S>>,
         cmd_rx: UnboundedReceiver<Command>,
         msg_tx: UnboundedSender<Message<M>>,
         connection_ctx: plugin::types::ConnectionCtx,
-        pre_forward: Option<Plugin>,
+        pre_forward: Option<P>,
         shutdown_tripwire: Fuse<oneshot::Receiver<()>>,
     ) -> Self {
         Self {
@@ -194,7 +195,7 @@ where
         };
 
         let action = if let Some(plugin) = self.pre_forward.clone() {
-            let result = tokio::task::spawn_blocking(move || plugin.call(plugin_ctx)).await??;
+            let result = tokio::task::spawn_blocking(move || plugin.call(&plugin_ctx)).await??;
 
             Some(result)
         } else {

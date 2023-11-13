@@ -5,7 +5,7 @@ use clap::Parser;
 
 use kiwi::config::Config;
 use kiwi::config::Kafka as KafkaConfig;
-use kiwi::plugin::Plugin;
+use kiwi::plugin::WasmPlugin;
 use kiwi::source::kafka::build_sources as build_kafka_sources;
 
 /// kiwi is a bridge between your backend services and front-end applications.
@@ -52,7 +52,9 @@ async fn main() -> anyhow::Result<()> {
     let pre_forward = config
         .plugins
         .and_then(|plugins| plugins.pre_forward)
-        .and_then(|path| Some(Plugin::from_file(path).expect("failed to load pre-forward plugin")));
+        .and_then(|path| {
+            Some(WasmPlugin::from_file(path).expect("failed to load pre-forward plugin"))
+        });
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
