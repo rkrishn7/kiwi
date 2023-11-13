@@ -85,7 +85,6 @@ impl LazyKafkaTopicConsumer {
                     tokio::task::yield_now().await;
                 }
                 LazyKafkaTopicConsumerState::Consuming => {
-                    println!("consuming");
                     self.inner.subscribe(&[&self.topic]).expect(
                         format!("failed to subscribe to kafka topic {}", &self.topic).as_str(),
                     );
@@ -118,8 +117,6 @@ impl LazyKafkaTopicConsumer {
                             }
                         }
                     }
-
-                    println!("done consuming");
 
                     self.state = LazyKafkaTopicConsumerState::Completed;
                 }
