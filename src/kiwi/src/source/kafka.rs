@@ -85,7 +85,9 @@ impl LazyKafkaTopicConsumer {
                     tokio::task::yield_now().await;
                 }
                 LazyKafkaTopicConsumerState::Consuming => {
-                    self.inner.subscribe(&[&self.topic]).unwrap_or_else(|_| panic!("failed to subscribe to kafka topic {}", &self.topic));
+                    self.inner.subscribe(&[&self.topic]).unwrap_or_else(|_| {
+                        panic!("failed to subscribe to kafka topic {}", &self.topic)
+                    });
 
                     let mut stream = self.inner.stream();
 
