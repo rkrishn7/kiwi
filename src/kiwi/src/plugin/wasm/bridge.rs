@@ -64,11 +64,7 @@ impl From<plugin::types::AuthCtx> for Auth {
 impl From<plugin::types::JwtCtx> for Jwt {
     fn from(value: plugin::types::JwtCtx) -> Self {
         Self {
-            claims: value
-                .claims
-                .into_iter()
-                .map(|(k, v)| (k, v))
-                .collect(),
+            claims: value.claims.into_iter().map(|(k, v)| (k, v)).collect(),
         }
     }
 }
