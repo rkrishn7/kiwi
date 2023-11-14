@@ -3,11 +3,10 @@ use std::collections::BTreeMap;
 use std::{net::SocketAddr, sync::Arc};
 
 use base64::{engine::general_purpose, Engine as _};
-use futures::{FutureExt, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message as _Message;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
 
 use crate::event::MutableEvent;
 use crate::ingest::IngestActor;
@@ -72,22 +71,13 @@ where
                     let (msg_tx, mut msg_rx) =
                         tokio::sync::mpsc::unbounded_channel::<Message<MessageData>>();
                     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
-                    let (_shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-                    let shutdown_tripwire = shutdown_rx.fuse();
 
                     // TODO: Build the proper connection context once we implement auth
                     let ctx = plugin::types::ConnectionCtx::WebSocket(
                         plugin::types::WebSocketConnectionCtx { addr, auth: None },
                     );
 
-                    let actor = IngestActor::new(
-                        sources,
-                        cmd_rx,
-                        msg_tx,
-                        ctx,
-                        pre_forward,
-                        shutdown_tripwire,
-                    );
+                    let actor = IngestActor::new(sources, cmd_rx, msg_tx, ctx, pre_forward);
 
                     tokio::spawn(actor.run());
 
