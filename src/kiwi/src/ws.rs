@@ -105,7 +105,7 @@ where
 
                                         match cmd {
                                             Ok(cmd) => {
-                                                if let Err(_) = cmd_tx.send(cmd) {
+                                                if cmd_tx.send(cmd).is_err() {
                                                     // If the send failed, the channel is closed
                                                     // thus we should terminate the connection
                                                     break;

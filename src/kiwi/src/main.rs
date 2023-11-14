@@ -51,10 +51,7 @@ async fn main() -> anyhow::Result<()> {
 
     let pre_forward = config
         .plugins
-        .and_then(|plugins| plugins.pre_forward)
-        .and_then(|path| {
-            Some(WasmPlugin::from_file(path).expect("failed to load pre-forward plugin"))
-        });
+        .and_then(|plugins| plugins.pre_forward).map(|path| WasmPlugin::from_file(path).expect("failed to load pre-forward plugin"));
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 

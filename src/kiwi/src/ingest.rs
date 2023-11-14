@@ -99,8 +99,8 @@ where
                     let _ = self.handle_command(cmd);
                 }
                 IngestActorState::ReceivedSourceEvent(event) => {
-                    if let Err(_) = self.forward_event(event).await {
-                        tracing::error!("Error while forwarding source event");
+                    if let Err(e) = self.forward_event(event).await {
+                        tracing::error!("Error while forwarding source event: {:?}", e);
                     }
                 }
                 IngestActorState::Lagged((source_id, count)) => {
@@ -108,10 +108,14 @@ where
 
                     // If we fail to send the message, it means the receiving half of the message channel
                     // was dropped, in which case we want to complete execution
-                    if let Err(_) = self.msg_tx.send(Message::Notice(Notice::Lag {
-                        source: source_id,
-                        count,
-                    })) {
+                    if self
+                        .msg_tx
+                        .send(Message::Notice(Notice::Lag {
+                            source: source_id,
+                            count,
+                        }))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -366,10 +370,7 @@ mod tests {
         let msg = msg_rx.recv().await.unwrap();
         match msg {
             Message::CommandResponse(CommandResponse::SubscribeOk { sources })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             _ => panic!("actor should respond with correct subscribe ok message"),
         }
 
@@ -441,10 +442,7 @@ mod tests {
 
         match msg_rx.recv().await.unwrap() {
             Message::CommandResponse(CommandResponse::UnsubscribeError { sources, .. })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             m => panic!(
                 "actor should respond with unsubscribe error message. Instead responded with {:?}",
                 m
@@ -460,10 +458,7 @@ mod tests {
         // Ensure the actor responds with a subscribe ok message
         match msg_rx.recv().await.unwrap() {
             Message::CommandResponse(CommandResponse::SubscribeOk { sources })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             _ => panic!("actor should respond with correct subscribe ok message"),
         }
 
@@ -520,10 +515,7 @@ mod tests {
         let msg = msg_rx.recv().await.unwrap();
         match msg {
             Message::CommandResponse(CommandResponse::SubscribeOk { sources })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             _ => panic!("actor should respond with correct subscribe ok message"),
         }
 
@@ -585,10 +577,7 @@ mod tests {
         let msg = msg_rx.recv().await.unwrap();
         match msg {
             Message::CommandResponse(CommandResponse::SubscribeOk { sources })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             _ => panic!("actor should respond with correct subscribe ok message"),
         }
 
@@ -659,10 +648,7 @@ mod tests {
         let msg = msg_rx.recv().await.unwrap();
         match msg {
             Message::CommandResponse(CommandResponse::SubscribeOk { sources })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             _ => panic!("actor should respond with correct subscribe ok message"),
         }
 
@@ -742,10 +728,7 @@ mod tests {
         let msg = msg_rx.recv().await.unwrap();
         match msg {
             Message::CommandResponse(CommandResponse::SubscribeOk { sources })
-                if sources == vec!["test"] =>
-            {
-                ()
-            }
+                if sources == vec!["test"] => {}
             _ => panic!("actor should respond with correct subscribe ok message"),
         }
 
