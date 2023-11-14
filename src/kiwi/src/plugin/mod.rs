@@ -1,6 +1,9 @@
-mod plugin;
 pub mod types;
 mod wasm;
-
-pub use plugin::Plugin;
 pub use wasm::WasmPlugin;
+
+use types::{Action, Context};
+
+pub trait Plugin {
+    fn call(&self, context: &Context) -> anyhow::Result<Action>;
+}

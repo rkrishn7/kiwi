@@ -27,7 +27,7 @@ impl From<plugin::types::KafkaEventCtx> for KafkaEventCtx {
         let partition = try_conv_bail!(value.partition, "partition conversion must not fail");
         let offset = try_conv_bail!(value.offset, "offset conversion must not fail");
         Self {
-            payload: value.payload.into(),
+            payload: value.payload,
             topic: value.topic,
             timestamp,
             partition,
@@ -67,7 +67,7 @@ impl From<plugin::types::JwtCtx> for Jwt {
             claims: value
                 .claims
                 .into_iter()
-                .map(|(k, v)| (k.into(), v.into()))
+                .map(|(k, v)| (k, v))
                 .collect(),
         }
     }
