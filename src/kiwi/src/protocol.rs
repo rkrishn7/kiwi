@@ -3,33 +3,29 @@ use thiserror::Error;
 
 use crate::source::SourceId;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 /// A request that is sent from a client to the server
 pub enum Command {
-    Subscribe { sources: Vec<SourceId> },
-    Unsubscribe { sources: Vec<SourceId> },
+    #[serde(rename_all = "camelCase")]
+    Subscribe { source_id: SourceId },
+    #[serde(rename_all = "camelCase")]
+    Unsubscribe { source_id: SourceId },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CommandResponse {
-    SubscribeOk {
-        sources: Vec<SourceId>,
-    },
-    UnsubscribeOk {
-        sources: Vec<SourceId>,
-    },
-    SubscribeError {
-        sources: Vec<SourceId>,
-        error: String,
-    },
-    UnsubscribeError {
-        sources: Vec<SourceId>,
-        error: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    SubscribeOk { source_id: SourceId },
+    #[serde(rename_all = "camelCase")]
+    UnsubscribeOk { source_id: SourceId },
+    #[serde(rename_all = "camelCase")]
+    SubscribeError { source_id: SourceId, error: String },
+    #[serde(rename_all = "camelCase")]
+    UnsubscribeError { source_id: SourceId, error: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,4 +53,98 @@ pub enum ProtocolError {
     UnsupportedCommandForm,
     #[error("Encountered an error while deserializing the command payload {0}")]
     CommandDeserialization(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_command_de() {
+        let command = r#"{"type":"SUBSCRIBE","sourceId":"test"}"#;
+        let deserialized: Command = serde_json::from_str(command).unwrap();
+        assert_eq!(
+            deserialized,
+            Command::Subscribe {
+                source_id: "test".into()
+            }
+        );
+
+        let command = r#"{"type":"UNSUBSCRIBE","sourceId":"test"}"#;
+        let deserialized: Command = serde_json::from_str(command).unwrap();
+        assert_eq!(
+            deserialized,
+            Command::Unsubscribe {
+                source_id: "test".into()
+            }
+        );
+    }
+
+    #[test]
+    fn test_message_ser() {
+        let message: Message<()> = Message::CommandResponse(CommandResponse::SubscribeOk {
+            source_id: "test".into(),
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"COMMAND_RESPONSE","data":{"type":"SUBSCRIBE_OK","sourceId":"test"}}"#
+        );
+
+        let message: Message<()> = Message::CommandResponse(CommandResponse::UnsubscribeOk {
+            source_id: "test".into(),
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"COMMAND_RESPONSE","data":{"type":"UNSUBSCRIBE_OK","sourceId":"test"}}"#
+        );
+
+        let message: Message<()> = Message::CommandResponse(CommandResponse::SubscribeError {
+            source_id: "test".into(),
+            error: "test".into(),
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"COMMAND_RESPONSE","data":{"type":"SUBSCRIBE_ERROR","sourceId":"test","error":"test"}}"#
+        );
+
+        let message: Message<()> = Message::CommandResponse(CommandResponse::UnsubscribeError {
+            source_id: "test".into(),
+            error: "test".into(),
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"COMMAND_RESPONSE","data":{"type":"UNSUBSCRIBE_ERROR","sourceId":"test","error":"test"}}"#
+        );
+
+        let message: Message<()> = Message::Notice(Notice::Lag {
+            source: "test".into(),
+            count: 1,
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"NOTICE","data":{"type":"LAG","source":"test","count":1}}"#
+        );
+
+        #[derive(Serialize)]
+        struct SourceResult {
+            topic: String,
+        }
+
+        let message = Message::Result(SourceResult {
+            topic: "test".into(),
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(serialized, r#"{"type":"RESULT","data":{"topic":"test"}}"#);
+    }
 }
