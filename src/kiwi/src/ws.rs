@@ -79,6 +79,7 @@ where
 
                     let actor = IngestActor::new(sources, cmd_rx, msg_tx, ctx, pre_forward);
 
+                    // Spawn the ingest actor. If it terminates, the connection should be closed
                     tokio::spawn(actor.run());
 
                     loop {
@@ -132,15 +133,23 @@ where
                                     }
                                 }
                             },
-                            Some(msg) = msg_rx.recv() => {
-                                let txt = serde_json::to_string(&msg).expect("yeet");
+                            msg = msg_rx.recv() => {
+                                match msg {
+                                    Some(msg) => {
+                                        let txt = serde_json::to_string(&msg).expect("yeet");
 
-                                // TODO: We don't want to use `send` here as it implies flushing
-                                if let Err(e) = ws_stream.send(ProtocolMessage::Text(txt)).await {
-                                    tracing::error!("Encountered unexpected error while writing to WS stream: {}", e);
+                                        // TODO: We don't want to use `send` here as it implies flushing
+                                        if let Err(e) = ws_stream.send(ProtocolMessage::Text(txt)).await {
+                                            tracing::error!("Encountered unexpected error while writing to WS stream: {}", e);
+                                        }
+                                    }
+                                    None => {
+                                        // The sole sender (our ingest actor) has hung up for some reason so we want to
+                                        // terminate the connection
+                                        break;
+                                    },
                                 }
                             },
-                            else => break,
                         }
                     }
                 }
