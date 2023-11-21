@@ -6,7 +6,9 @@ use base64::{engine::general_purpose, Engine as _};
 use futures::{SinkExt, StreamExt};
 use rdkafka::message::OwnedMessage;
 use rdkafka::Message as _Message;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::handshake::server::Callback;
 
 use crate::event::MutableEvent;
 use crate::ingest::IngestActor;
@@ -165,4 +167,38 @@ where
     }
 
     Ok(())
+}
+
+pub struct JwtVerifyCallback<'a> {
+    algorithm_type: jwt::AlgorithmType,
+    pem: &'a [u8],
+}
+
+impl<'a> Callback for JwtVerifyCallback<'a> {
+    fn on_request(
+        self,
+        request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+        response: tokio_tungstenite::tungstenite::handshake::server::Response,
+    ) -> Result<
+        tokio_tungstenite::tungstenite::handshake::server::Response,
+        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+    > {
+        todo!()
+    }
+}
+
+async fn consume_stream<S>(stream: S, addr: SocketAddr) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let callback = JwtVerifyCallback {
+        algorithm_type: jwt::AlgorithmType::Hs256,
+        pem: b"secret",
+    };
+
+    let mut ws_stream =
+        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, None).await?;
+    tracing::info!("New WebSocket connection: {}", addr);
+
+    todo!()
 }

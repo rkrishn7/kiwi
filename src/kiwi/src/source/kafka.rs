@@ -191,7 +191,7 @@ pub fn build_sources(
         // We don't care about offset committing, since we are just relaying the latest messages.
         "enable.auto.commit".to_string() => "false".to_string(),
         "enable.partition.eof".to_string() => "false".to_string(),
-        // Always start from the latest topic. We could make this configurable in the future
+        // Always start from the latest offset. We could make this configurable in the future
         "auto.offset.reset".to_string() =>  "latest".to_string(),
         // A friendly label to present to Kafka
         "client.id".to_string() => "kiwi".to_string(),

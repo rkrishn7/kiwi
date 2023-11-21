@@ -1,7 +1,0 @@
-package kiwi:kiwi@0.1.0;
-
-world plugin {
-    use types.{context, action};
-
-    export execute: func(ctx: context) -> action;
-}
