@@ -1,0 +1,27 @@
+package kiwi:kiwi@0.1.0;
+
+world plugin {
+    use types.{context, action};
+
+    export execute: func(ctx: context) -> action;
+}
+
+world pre-forward-hook {
+    use types.{context, action};
+
+    export execute: func(ctx: context) -> action;
+}
+
+world authentication-hook {
+    enum method {
+        
+    }
+
+    record request {
+        uri: string;
+        version: string;
+        headers: map[string];
+    }
+
+    export authenticate: func(req: request) -> authoutcome;
+}
