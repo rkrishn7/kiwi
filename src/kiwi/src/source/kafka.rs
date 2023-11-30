@@ -15,7 +15,7 @@ use tokio::sync::{
 };
 
 use crate::event::MutableEvent;
-use crate::plugin;
+use crate::hook;
 
 use super::{Source, SourceId};
 
@@ -151,15 +151,21 @@ impl KafkaTopicSource {
     }
 }
 
-impl From<OwnedMessage> for plugin::types::EventCtx {
+impl From<OwnedMessage> for hook::intercept::types::EventCtx {
     fn from(value: OwnedMessage) -> Self {
-        Self::Kafka(plugin::types::KafkaEventCtx {
+        Self::Kafka(value.into())
+    }
+}
+
+impl From<OwnedMessage> for hook::intercept::types::KafkaEventCtx {
+    fn from(value: OwnedMessage) -> Self {
+        Self {
             payload: value.payload().map(|p| p.to_owned()),
             topic: value.topic().to_string(),
             timestamp: value.timestamp().to_millis(),
             partition: value.partition(),
             offset: value.offset(),
-        })
+        }
     }
 }
 

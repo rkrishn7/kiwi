@@ -5,7 +5,7 @@ use clap::Parser;
 
 use kiwi::config::Config;
 use kiwi::config::Kafka as KafkaConfig;
-use kiwi::plugin::WasmPlugin;
+use kiwi::hook::intercept::wasm::WasmInterceptHook;
 use kiwi::source::kafka::build_sources as build_kafka_sources;
 
 /// kiwi is a bridge between your backend services and front-end applications.
@@ -49,14 +49,14 @@ async fn main() -> anyhow::Result<()> {
         bootstrap_servers.clone(),
     );
 
-    let pre_forward = config
-        .plugins
-        .and_then(|plugins| plugins.pre_forward)
-        .map(|path| WasmPlugin::from_file(path).expect("failed to load pre-forward plugin"));
+    let intercept_hook = config
+        .hooks
+        .and_then(|plugins| plugins.intercept)
+        .map(|path| WasmInterceptHook::from_file(path).expect("failed to load intercept plugin"));
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
-    kiwi::ws::serve(&listen_addr, Arc::new(kafka_sources), pre_forward).await?;
+    kiwi::ws::serve(&listen_addr, Arc::new(kafka_sources), intercept_hook).await?;
 
     Ok(())
 }

@@ -1,6 +1,3 @@
-// pub use super::bindgen::kiwi::kiwi::types::*;
-
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use crate::event::EventPayload;
@@ -15,8 +12,14 @@ pub enum Action {
 #[derive(Debug, Clone)]
 /// Context needed to execute a plugin
 pub struct Context {
+    pub(crate) auth: Option<AuthCtx>,
     pub(crate) connection: ConnectionCtx,
     pub(crate) event: EventCtx,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthCtx {
+    pub(crate) raw: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,18 +29,7 @@ pub enum ConnectionCtx {
 
 #[derive(Debug, Clone)]
 pub struct WebSocketConnectionCtx {
-    pub(crate) auth: Option<AuthCtx>,
     pub(crate) addr: SocketAddr,
-}
-
-#[derive(Debug, Clone)]
-pub enum AuthCtx {
-    Jwt(JwtCtx),
-}
-
-#[derive(Debug, Clone)]
-pub struct JwtCtx {
-    pub(crate) claims: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]

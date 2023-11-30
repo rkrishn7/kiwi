@@ -1,3 +1,6 @@
+mod bindgen;
+mod bridge;
+
 use std::path::Path;
 
 use wasmtime::component::{Component, Linker};
@@ -5,11 +8,11 @@ use wasmtime::Store;
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::preview2::{Table, WasiCtx, WasiCtxBuilder};
 
-use crate::plugin::types::{Action, Context};
-use crate::plugin::Plugin;
+use super::types::Outcome;
+use super::Authenticate;
 
-use super::bindgen;
 use once_cell::sync::Lazy;
+use tokio_tungstenite::tungstenite::http::Request as HttpRequest;
 
 static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
@@ -17,14 +20,14 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
     Engine::new(&config).expect("failed to instantiate engine")
 });
 
-struct WasmPluginState {
+struct State {
     table: Table,
     wasi: WasiCtx,
 }
 
-impl bindgen::kiwi::kiwi::types::Host for WasmPluginState {}
+impl bindgen::kiwi::kiwi::authenticate_types::Host for State {}
 
-impl wasmtime_wasi::preview2::WasiView for WasmPluginState {
+impl wasmtime_wasi::preview2::WasiView for State {
     fn table(&self) -> &wasmtime_wasi::preview2::Table {
         &self.table
     }
@@ -43,37 +46,40 @@ impl wasmtime_wasi::preview2::WasiView for WasmPluginState {
 }
 
 #[derive(Clone)]
-pub struct WasmPlugin {
+pub struct WasmInterceptHook {
     component: Component,
+    linker: Linker<State>,
 }
 
-impl WasmPlugin {
+impl WasmInterceptHook {
     pub fn from_file(file: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let mut linker = Linker::new(&ENGINE);
+        bindgen::AuthenticateHook::add_to_linker(&mut linker, |state: &mut State| state)?;
+        wasmtime_wasi::preview2::command::sync::add_to_linker(&mut linker)?;
+
         Ok(Self {
             component: Component::from_file(&ENGINE, file)?,
+            linker,
         })
     }
 }
 
-impl Plugin for WasmPlugin {
-    fn call(&self, ctx: &Context) -> anyhow::Result<Action> {
-        let mut linker = Linker::new(&ENGINE);
-        bindgen::Plugin::add_to_linker(&mut linker, |state: &mut WasmPluginState| state)?;
-        wasmtime_wasi::preview2::command::sync::add_to_linker(&mut linker)?;
-
+impl Authenticate for WasmInterceptHook {
+    fn authenticate(&self, request: HttpRequest<()>) -> anyhow::Result<Outcome> {
         let mut builder = WasiCtxBuilder::new();
 
         let mut store = Store::new(
             &ENGINE,
-            WasmPluginState {
+            State {
                 table: Table::new(),
                 wasi: builder.build(),
             },
         );
 
-        let (bindings, _) = bindgen::Plugin::instantiate(&mut store, &self.component, &linker)?;
+        let (bindings, _) =
+            bindgen::AuthenticateHook::instantiate(&mut store, &self.component, &self.linker)?;
 
-        let res = bindings.call_execute(&mut store, &ctx.clone().into())?;
+        let res = bindings.call_authenticate(&mut store, &request.into())?;
 
         Ok(res.into())
     }

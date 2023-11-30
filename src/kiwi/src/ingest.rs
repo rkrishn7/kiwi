@@ -9,7 +9,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::event::MutableEvent;
-use crate::plugin::{self, Plugin};
+use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId};
 
@@ -17,14 +17,14 @@ use crate::source::{Source, SourceId};
 /// - Processing commands as they become available
 /// - Reading events from subscribed sources, processing them, and
 ///   forwarding them along its active subscriptions
-pub struct IngestActor<S, T, M, P> {
+pub struct IngestActor<S, T, M, I> {
     cmd_rx: UnboundedReceiver<Command>,
     msg_tx: UnboundedSender<Message<M>>,
     sources: Arc<BTreeMap<SourceId, S>>,
     /// Subscriptions this actor currently maintains for its handle
     subscriptions: BTreeMap<SourceId, BroadcastStream<T>>,
-    connection_ctx: plugin::types::ConnectionCtx,
-    pre_forward: Option<P>,
+    connection_ctx: intercept::types::ConnectionCtx,
+    pre_forward: Option<I>,
 }
 
 #[derive(Debug)]
@@ -42,14 +42,14 @@ impl<S, T, M, P> IngestActor<S, T, M, P>
 where
     M: Clone + Send + Sync + 'static,
     S: Source<Message = T>,
-    T: Into<plugin::types::EventCtx> + Into<M> + MutableEvent + Debug + Clone + Send + 'static,
-    P: Plugin + Clone + Send + 'static,
+    T: Into<intercept::types::EventCtx> + Into<M> + MutableEvent + Debug + Clone + Send + 'static,
+    P: Intercept + Clone + Send + 'static,
 {
     pub fn new(
         sources: Arc<BTreeMap<String, S>>,
         cmd_rx: UnboundedReceiver<Command>,
         msg_tx: UnboundedSender<Message<M>>,
-        connection_ctx: plugin::types::ConnectionCtx,
+        connection_ctx: intercept::types::ConnectionCtx,
         pre_forward: Option<P>,
     ) -> Self {
         Self {
@@ -163,14 +163,17 @@ where
     }
 
     async fn forward_event(&mut self, event: T) -> anyhow::Result<()> {
-        let plugin_event_ctx: plugin::types::EventCtx = event.clone().into();
-        let plugin_ctx = plugin::types::Context {
+        let plugin_event_ctx: intercept::types::EventCtx = event.clone().into();
+        let plugin_ctx = intercept::types::Context {
+            // TODO
+            auth: None,
             connection: self.connection_ctx.clone(),
             event: plugin_event_ctx,
         };
 
         let action = if let Some(plugin) = self.pre_forward.clone() {
-            let result = tokio::task::spawn_blocking(move || plugin.call(&plugin_ctx)).await??;
+            let result =
+                tokio::task::spawn_blocking(move || plugin.intercept(&plugin_ctx)).await??;
 
             Some(result)
         } else {
@@ -178,11 +181,11 @@ where
         };
 
         match action {
-            Some(plugin::types::Action::Discard) => (),
-            None | Some(plugin::types::Action::Forward) => {
+            Some(intercept::types::Action::Discard) => (),
+            None | Some(intercept::types::Action::Forward) => {
                 self.msg_tx.send(Message::Result(event.into()))?;
             }
-            Some(plugin::types::Action::Transform(payload)) => {
+            Some(intercept::types::Action::Transform(payload)) => {
                 let transformed = event.set_payload(payload);
 
                 self.msg_tx.send(Message::Result(transformed.into()))?;
@@ -210,9 +213,9 @@ mod tests {
         payload: Option<Vec<u8>>,
     }
 
-    impl From<TestMessage> for plugin::types::EventCtx {
+    impl From<TestMessage> for intercept::types::EventCtx {
         fn from(value: TestMessage) -> Self {
-            Self::Kafka(plugin::types::KafkaEventCtx {
+            Self::Kafka(intercept::types::KafkaEventCtx {
                 payload: value.payload,
                 topic: "test".to_string(),
                 timestamp: None,
@@ -245,9 +248,12 @@ mod tests {
     /// Discards all events
     struct DiscardPlugin;
 
-    impl Plugin for DiscardPlugin {
-        fn call(&self, _ctx: &plugin::types::Context) -> anyhow::Result<plugin::types::Action> {
-            Ok(plugin::types::Action::Discard)
+    impl Intercept for DiscardPlugin {
+        fn intercept(
+            &self,
+            _ctx: &intercept::types::Context,
+        ) -> anyhow::Result<intercept::types::Action> {
+            Ok(intercept::types::Action::Discard)
         }
     }
 
@@ -267,7 +273,7 @@ mod tests {
             .unwrap();
     }
 
-    fn spawn_actor<P: Plugin + Clone + Send + Sync + 'static>(
+    fn spawn_actor<P: Intercept + Clone + Send + Sync + 'static>(
         pre_forward: Option<P>,
         test_source_ids: Vec<String>,
         source_channel_capacity: usize,
@@ -298,8 +304,7 @@ mod tests {
             Arc::new(sources),
             cmd_rx,
             msg_tx,
-            plugin::types::ConnectionCtx::WebSocket(plugin::types::WebSocketConnectionCtx {
-                auth: None,
+            intercept::types::ConnectionCtx::WebSocket(intercept::types::WebSocketConnectionCtx {
                 addr: "127.0.0.1:8000".parse().unwrap(),
             }),
             pre_forward,
@@ -458,9 +463,12 @@ mod tests {
         #[derive(Debug, Clone)]
         struct ForwardPlugin;
 
-        impl Plugin for ForwardPlugin {
-            fn call(&self, _ctx: &plugin::types::Context) -> anyhow::Result<plugin::types::Action> {
-                Ok(plugin::types::Action::Forward)
+        impl Intercept for ForwardPlugin {
+            fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
+                Ok(intercept::types::Action::Forward)
             }
         }
 
@@ -496,9 +504,12 @@ mod tests {
         #[derive(Debug, Clone)]
         struct TransformPlugin;
 
-        impl Plugin for TransformPlugin {
-            fn call(&self, _ctx: &plugin::types::Context) -> anyhow::Result<plugin::types::Action> {
-                Ok(plugin::types::Action::Transform(Some(
+        impl Intercept for TransformPlugin {
+            fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
+                Ok(intercept::types::Action::Transform(Some(
                     "hello".as_bytes().to_owned(),
                 )))
             }
@@ -543,10 +554,13 @@ mod tests {
 
         // The bottleneck for the actor is now this plugin. Since the actor calls it
         // synchronously, it can only process around 10 messages/sec
-        impl Plugin for SlowPlugin {
-            fn call(&self, _ctx: &plugin::types::Context) -> anyhow::Result<plugin::types::Action> {
+        impl Intercept for SlowPlugin {
+            fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
                 std::thread::sleep(Duration::from_millis(100));
-                Ok(plugin::types::Action::Forward)
+                Ok(intercept::types::Action::Forward)
             }
         }
 
