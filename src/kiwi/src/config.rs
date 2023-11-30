@@ -5,7 +5,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub sources: Sources,
-    pub plugins: Option<Plugins>,
+    pub hooks: Option<Hooks>,
     pub server: Server,
 }
 
@@ -29,8 +29,8 @@ impl Kafka {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Plugins {
-    pub pre_forward: Option<String>,
+pub struct Hooks {
+    pub intercept: Option<String>,
 }
 
 /// Topic configuration
@@ -97,8 +97,8 @@ mod tests {
     fn test_plugins() {
         // Ensure we can parse a config that includes the pre_forward plugin
         let config = "
-        plugins:
-            pre_forward: ./test.wasm
+        hooks:
+            intercept: ./test.wasm
         sources:
             kafka:
                 bootstrap_servers:
@@ -111,11 +111,8 @@ mod tests {
 
         let config = Config::from_str(config).unwrap();
 
-        assert!(config.plugins.is_some());
-        assert_eq!(
-            config.plugins.unwrap().pre_forward,
-            Some("./test.wasm".into())
-        );
+        assert!(config.hooks.is_some());
+        assert_eq!(config.hooks.unwrap().intercept, Some("./test.wasm".into()));
 
         // Ensure we can parse a config that does not include any plugins
         let config = "
@@ -131,7 +128,7 @@ mod tests {
 
         let config = Config::from_str(config).unwrap();
 
-        assert!(config.plugins.is_none());
+        assert!(config.hooks.is_none());
     }
 
     #[test]

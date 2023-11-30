@@ -1,6 +1,7 @@
-interface types {
+interface intercept-types {
     // Plugin context
     record context {
+        auth: option<list<u8>>,
         connection: connection-ctx,
         event: event-ctx,
     }
@@ -23,16 +24,7 @@ interface types {
         offset: u64,
     }
 
-    variant auth {
-        jwt(jwt),
-    }
-    
-    record jwt {
-        claims: list<tuple<string, string>>,
-    }
-
     record websocket {
-        auth: option<auth>,
         addr: option<string>,
     }
 

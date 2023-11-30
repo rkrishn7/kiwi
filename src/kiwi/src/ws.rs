@@ -13,7 +13,7 @@ use tokio_tungstenite::tungstenite::handshake::server::Callback;
 use crate::event::MutableEvent;
 use crate::ingest::IngestActor;
 
-use crate::plugin::{self, Plugin};
+use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
 use crate::source::Source;
 
@@ -42,21 +42,21 @@ impl From<OwnedMessage> for MessageData {
 }
 
 /// Starts a WebSocket server with the specified configuration
-pub async fn serve<S, M, P>(
+pub async fn serve<S, M, I>(
     listen_addr: &SocketAddr,
     sources: Arc<BTreeMap<String, S>>,
-    pre_forward: Option<P>,
+    intercept_hook: Option<I>,
 ) -> anyhow::Result<()>
 where
     S: Source<Message = M> + Send + Sync + 'static,
-    M: Into<plugin::types::EventCtx>
+    M: Into<intercept::types::EventCtx>
         + Into<MessageData>
         + MutableEvent
         + std::fmt::Debug
         + Clone
         + Send
         + 'static,
-    P: Plugin + Clone + Send + Sync + 'static,
+    I: Intercept + Clone + Send + Sync + 'static,
 {
     // TODO: Support TLS
     let listener = TcpListener::bind(listen_addr).await?;
@@ -64,7 +64,7 @@ where
 
     while let Ok((stream, addr)) = listener.accept().await {
         let sources = Arc::clone(&sources);
-        let pre_forward = pre_forward.clone();
+        let pre_forward = intercept_hook.clone();
         tokio::spawn(async move {
             match tokio_tungstenite::accept_async(stream).await {
                 Ok(mut ws_stream) => {
@@ -74,9 +74,8 @@ where
                         tokio::sync::mpsc::unbounded_channel::<Message<MessageData>>();
                     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
-                    // TODO: Build the proper connection context once we implement auth
-                    let ctx = plugin::types::ConnectionCtx::WebSocket(
-                        plugin::types::WebSocketConnectionCtx { addr, auth: None },
+                    let ctx = intercept::types::ConnectionCtx::WebSocket(
+                        intercept::types::WebSocketConnectionCtx { addr },
                     );
 
                     let actor = IngestActor::new(sources, cmd_rx, msg_tx, ctx, pre_forward);
