@@ -19,11 +19,3 @@ sources:
 
 server:
   address: '127.0.0.1:8000'
-  authentication:
-    jwt:
-      # One of HS256, RS256
-      algorithm: HS256
-      # Path to the PEM file containing the key material
-      pem_file: 'jwt.key'
-
-  # extra options
