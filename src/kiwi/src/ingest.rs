@@ -24,6 +24,8 @@ pub struct IngestActor<S, T, M, I> {
     /// Subscriptions this actor currently maintains for its handle
     subscriptions: BTreeMap<SourceId, BroadcastStream<T>>,
     connection_ctx: intercept::types::ConnectionCtx,
+    /// Custom context provided by the authentication hook
+    auth_ctx: Option<intercept::types::AuthCtx>,
     pre_forward: Option<I>,
 }
 
@@ -50,6 +52,7 @@ where
         cmd_rx: UnboundedReceiver<Command>,
         msg_tx: UnboundedSender<Message<M>>,
         connection_ctx: intercept::types::ConnectionCtx,
+        auth_ctx: Option<intercept::types::AuthCtx>,
         pre_forward: Option<P>,
     ) -> Self {
         Self {
@@ -57,6 +60,7 @@ where
             msg_tx,
             sources,
             connection_ctx,
+            auth_ctx,
             subscriptions: Default::default(),
             pre_forward,
         }
@@ -165,8 +169,7 @@ where
     async fn forward_event(&mut self, event: T) -> anyhow::Result<()> {
         let plugin_event_ctx: intercept::types::EventCtx = event.clone().into();
         let plugin_ctx = intercept::types::Context {
-            // TODO
-            auth: None,
+            auth: self.auth_ctx.clone(),
             connection: self.connection_ctx.clone(),
             event: plugin_event_ctx,
         };
@@ -307,6 +310,7 @@ mod tests {
             intercept::types::ConnectionCtx::WebSocket(intercept::types::WebSocketConnectionCtx {
                 addr: "127.0.0.1:8000".parse().unwrap(),
             }),
+            None,
             pre_forward,
         );
 

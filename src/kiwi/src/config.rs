@@ -31,6 +31,7 @@ impl Kafka {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Hooks {
     pub intercept: Option<String>,
+    pub authenticate: Option<String>,
 }
 
 /// Topic configuration
@@ -43,35 +44,6 @@ pub struct Topic {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Server {
     pub address: String,
-    pub authentication: Option<Authentication>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Authentication {
-    pub jwt: JwtAuthentication,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct JwtAuthentication {
-    pub algorithm: JwtAlgorithmType,
-    pub pem_file: String,
-}
-
-/// Supported JWT algorithms
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum JwtAlgorithmType {
-    Hs256,
-    Rs256,
-}
-
-impl From<JwtAlgorithmType> for jwt::AlgorithmType {
-    fn from(value: JwtAlgorithmType) -> Self {
-        match value {
-            JwtAlgorithmType::Hs256 => jwt::AlgorithmType::Hs256,
-            JwtAlgorithmType::Rs256 => jwt::AlgorithmType::Rs256,
-        }
-    }
 }
 
 impl Config {
@@ -94,11 +66,12 @@ impl Config {
 mod tests {
     use super::*;
     #[test]
-    fn test_plugins() {
-        // Ensure we can parse a config that includes the pre_forward plugin
+    fn test_hooks() {
+        // Ensure we can parse a config that includes hooks
         let config = "
         hooks:
-            intercept: ./test.wasm
+            intercept: ./intercept.wasm
+            authenticate: ./auth.wasm
         sources:
             kafka:
                 bootstrap_servers:
@@ -112,7 +85,14 @@ mod tests {
         let config = Config::from_str(config).unwrap();
 
         assert!(config.hooks.is_some());
-        assert_eq!(config.hooks.unwrap().intercept, Some("./test.wasm".into()));
+        assert_eq!(
+            config.hooks.clone().unwrap().intercept,
+            Some("./intercept.wasm".into())
+        );
+        assert_eq!(
+            config.hooks.unwrap().authenticate,
+            Some("./auth.wasm".into())
+        );
 
         // Ensure we can parse a config that does not include any plugins
         let config = "
@@ -129,47 +109,5 @@ mod tests {
         let config = Config::from_str(config).unwrap();
 
         assert!(config.hooks.is_none());
-    }
-
-    #[test]
-    fn test_authentication() {
-        // Ensure we can parse a config that does not include any authentication
-        let config = "
-        sources:
-            kafka:
-                bootstrap_servers:
-                    - localhost:9092
-                topics:
-                    - name: test
-        server:
-            address: '127.0.0.1:8000'
-        ";
-
-        let config = Config::from_str(config).unwrap();
-
-        assert!(config.server.authentication.is_none());
-
-        // Ensure we can parse a config that includes JWT authentication
-        let config = "
-        sources:
-            kafka:
-                bootstrap_servers:
-                    - localhost:9092
-                topics:
-                    - name: test
-        server:
-            address: '127.0.0.1:8000'
-            authentication:
-                jwt:
-                    algorithm: HS256
-                    pem_file: ./test.pem
-        ";
-
-        let config = Config::from_str(config).unwrap();
-
-        let authentication = config.server.authentication.unwrap();
-
-        assert_eq!(authentication.jwt.algorithm, JwtAlgorithmType::Hs256);
-        assert_eq!(authentication.jwt.pem_file, "./test.pem".to_string());
     }
 }
