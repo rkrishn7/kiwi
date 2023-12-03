@@ -1,8 +1,11 @@
 # Plugins are WASM modules that provide the guest implementation for the plugin WIT world
-plugins:
+hooks:
   # This plugin executes once kiwi ingest's the source event, but before it decides whether to
   # forward the event to any of the source's subscribers. 
-  # pre_forward: ''
+  # intercept: ''
+
+  # This hook executes ...
+  # authenticate: ''
 
 sources:
   kafka:

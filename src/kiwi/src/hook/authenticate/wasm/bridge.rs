@@ -13,8 +13,8 @@ impl From<Outcome> for types::Outcome {
     }
 }
 
-impl From<HttpRequest<()>> for Request {
-    fn from(value: HttpRequest<()>) -> Self {
+impl From<&HttpRequest<()>> for Request {
+    fn from(value: &HttpRequest<()>) -> Self {
         Self {
             uri: value.uri().to_string(),
             headers: value

@@ -5,6 +5,7 @@ use clap::Parser;
 
 use kiwi::config::Config;
 use kiwi::config::Kafka as KafkaConfig;
+use kiwi::hook::authenticate::wasm::WasmAuthenticateHook;
 use kiwi::hook::intercept::wasm::WasmInterceptHook;
 use kiwi::source::kafka::build_sources as build_kafka_sources;
 
@@ -51,12 +52,28 @@ async fn main() -> anyhow::Result<()> {
 
     let intercept_hook = config
         .hooks
-        .and_then(|plugins| plugins.intercept)
-        .map(|path| WasmInterceptHook::from_file(path).expect("failed to load intercept plugin"));
+        .as_ref()
+        .and_then(|hooks| hooks.intercept.clone())
+        .map(|path| {
+            WasmInterceptHook::from_file(path).expect("failed to load intercept wasm hook")
+        });
+
+    let authenticate_hook = config
+        .hooks
+        .and_then(|hooks| hooks.authenticate)
+        .map(|path| {
+            WasmAuthenticateHook::from_file(path).expect("failed to load authenticate wasm hook")
+        });
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
-    kiwi::ws::serve(&listen_addr, Arc::new(kafka_sources), intercept_hook).await?;
+    kiwi::ws::serve(
+        &listen_addr,
+        Arc::new(kafka_sources),
+        intercept_hook,
+        authenticate_hook,
+    )
+    .await?;
 
     Ok(())
 }

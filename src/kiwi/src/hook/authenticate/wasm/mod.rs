@@ -46,12 +46,12 @@ impl wasmtime_wasi::preview2::WasiView for State {
 }
 
 #[derive(Clone)]
-pub struct WasmInterceptHook {
+pub struct WasmAuthenticateHook {
     component: Component,
     linker: Linker<State>,
 }
 
-impl WasmInterceptHook {
+impl WasmAuthenticateHook {
     pub fn from_file(file: impl AsRef<Path>) -> anyhow::Result<Self> {
         let mut linker = Linker::new(&ENGINE);
         bindgen::AuthenticateHook::add_to_linker(&mut linker, |state: &mut State| state)?;
@@ -64,8 +64,8 @@ impl WasmInterceptHook {
     }
 }
 
-impl Authenticate for WasmInterceptHook {
-    fn authenticate(&self, request: HttpRequest<()>) -> anyhow::Result<Outcome> {
+impl Authenticate for WasmAuthenticateHook {
+    fn authenticate(&self, request: &HttpRequest<()>) -> anyhow::Result<Outcome> {
         let mut builder = WasiCtxBuilder::new();
 
         let mut store = Store::new(

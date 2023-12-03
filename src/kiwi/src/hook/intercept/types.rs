@@ -22,6 +22,12 @@ pub struct AuthCtx {
     pub(crate) raw: Vec<u8>,
 }
 
+impl AuthCtx {
+    pub fn from_bytes(raw: Vec<u8>) -> Self {
+        Self { raw }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ConnectionCtx {
     WebSocket(WebSocketConnectionCtx),
