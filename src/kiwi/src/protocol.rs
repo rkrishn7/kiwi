@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::source::SourceId;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 /// A request that is sent from a client to the server
@@ -14,7 +14,7 @@ pub enum Command {
     Unsubscribe { source_id: SourceId },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CommandResponse {
@@ -28,7 +28,7 @@ pub enum CommandResponse {
     UnsubscribeError { source_id: SourceId, error: String },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 /// An info or error message that may be pushed to a client. A notice, in many
@@ -37,7 +37,7 @@ pub enum Notice {
     Lag { source: SourceId, count: u64 },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", content = "data")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 /// An outbound message that is sent from the server to a client
