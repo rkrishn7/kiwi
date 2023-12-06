@@ -25,13 +25,13 @@ use crate::source::Source;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMessage};
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct MessageData {
-    payload: Option<String>,
-    topic: String,
-    timestamp: Option<i64>,
-    partition: i32,
-    offset: i64,
+    pub payload: Option<String>,
+    pub topic: String,
+    pub timestamp: Option<i64>,
+    pub partition: i32,
+    pub offset: i64,
 }
 
 impl From<OwnedMessage> for MessageData {
