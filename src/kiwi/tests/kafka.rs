@@ -6,7 +6,7 @@ use tokio_tungstenite::{connect_async, tungstenite};
 
 use kiwi::{
     protocol::{Command, CommandResponse, Message},
-    ws::MessageData,
+    source::SourceResult,
 };
 
 use tempfile::NamedTempFile;
@@ -101,11 +101,11 @@ async fn test_kafka_source() -> anyhow::Result<()> {
         let mut count = 0;
         while let Some(msg) = read.next().await {
             let msg = msg.unwrap();
-            let msg: Message<MessageData> = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
+            let msg: Message<SourceResult> = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
 
             match msg {
                 Message::Result(msg) => {
-                    assert_eq!(msg.topic.as_ref(), "topic1".to_string());
+                    assert_eq!(msg.source_id.as_ref(), "topic1".to_string());
                     let msg = base64::engine::general_purpose::STANDARD
                         .decode(msg.payload.as_ref().unwrap())
                         .unwrap();
