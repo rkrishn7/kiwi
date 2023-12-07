@@ -111,7 +111,7 @@ where
         stream,
         |req: &Request, res: Response| {
             if let Some(hook) = authenticate_hook {
-                let outcome = tokio::task::block_in_place(|| hook.authenticate(&req));
+                let outcome = tokio::task::block_in_place(|| hook.authenticate(req));
 
                 match outcome {
                     Ok(Outcome::Authenticate) => (),
