@@ -56,7 +56,7 @@ impl Config {
     }
 
     fn from_str(contents: &str) -> Result<Self, anyhow::Error> {
-        let config = serde_yaml::from_str::<'_, Config>(&contents)?;
+        let config = serde_yaml::from_str::<'_, Config>(contents)?;
 
         Ok(config)
     }
