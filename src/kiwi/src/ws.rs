@@ -2,10 +2,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::{net::SocketAddr, sync::Arc};
 
-use base64::{engine::general_purpose, Engine as _};
 use futures::{SinkExt, StreamExt};
-use rdkafka::message::OwnedMessage;
-use rdkafka::Message as _Message;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -20,31 +17,10 @@ use crate::ingest::IngestActor;
 
 use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
-use crate::source::Source;
+use crate::source::{Source, SourceResult};
 
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMessage};
-
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct MessageData {
-    pub payload: Option<String>,
-    pub topic: String,
-    pub timestamp: Option<i64>,
-    pub partition: i32,
-    pub offset: i64,
-}
-
-impl From<OwnedMessage> for MessageData {
-    fn from(value: OwnedMessage) -> Self {
-        Self {
-            payload: value.payload().map(|p| general_purpose::STANDARD.encode(p)),
-            topic: value.topic().to_owned(),
-            timestamp: value.timestamp().to_millis(),
-            partition: value.partition(),
-            offset: value.offset(),
-        }
-    }
-}
 
 /// Starts a WebSocket server with the specified configuration
 pub async fn serve<S, M, I, A>(
@@ -56,7 +32,7 @@ pub async fn serve<S, M, I, A>(
 where
     S: Source<Message = M> + Send + Sync + 'static,
     M: Into<intercept::types::EventCtx>
-        + Into<MessageData>
+        + Into<SourceResult>
         + MutableEvent
         + std::fmt::Debug
         + Clone
@@ -150,7 +126,7 @@ where
     Stream: AsyncRead + AsyncWrite + Unpin,
     S: Source<Message = M> + Send + Sync + 'static,
     M: Into<intercept::types::EventCtx>
-        + Into<MessageData>
+        + Into<SourceResult>
         + MutableEvent
         + std::fmt::Debug
         + Clone
@@ -158,7 +134,7 @@ where
         + 'static,
     I: Intercept + Clone + Send + Sync + 'static,
 {
-    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message<MessageData>>();
+    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message<SourceResult>>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
     let actor = IngestActor::new(
