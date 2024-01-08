@@ -9,7 +9,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = "1.0.75"
 base64 = "0.21.5"
-clap = { version = "4.4.8", features = ["derive", "env"] }
+clap = { version = "4.4.13", features = ["derive", "env"] }
 futures = "0.3.29"
 jwt = "0.16.0"
 maplit = "1.0.2"
