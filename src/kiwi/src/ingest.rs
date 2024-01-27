@@ -11,7 +11,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::event::MutableEvent;
 use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
-use crate::source::{Source, SourceId};
+use crate::source::{Source, SourceId, SourceMessage};
 
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
@@ -22,7 +22,7 @@ pub struct IngestActor<S, T, M, I> {
     msg_tx: UnboundedSender<Message<M>>,
     sources: Arc<BTreeMap<SourceId, S>>,
     /// Subscriptions this actor currently maintains for its handle
-    subscriptions: BTreeMap<SourceId, BroadcastStream<T>>,
+    subscriptions: BTreeMap<SourceId, BroadcastStream<SourceMessage<T>>>,
     connection_ctx: intercept::types::ConnectionCtx,
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
@@ -36,14 +36,14 @@ pub struct IngestActor<S, T, M, I> {
 /// may depart from the traditional concept of a state machine
 enum IngestActorState<T> {
     ReceivedCommand(Command),
-    ReceivedSourceEvent(T),
+    ReceivedSourceEvent((SourceId, T)),
     Lagged((SourceId, u64)),
 }
 
 impl<S, T, M, P> IngestActor<S, T, M, P>
 where
     M: Clone + Send + Sync + 'static,
-    S: Source<Message = T>,
+    S: Source<Result = T>,
     T: Into<intercept::types::EventCtx> + Into<M> + MutableEvent + Debug + Clone + Send + 'static,
     P: Intercept + Clone + Send + 'static,
 {
@@ -90,7 +90,7 @@ where
                     // handle later signals to add a new subscription via `cmd_tx`
                     Some((source_id, res)) = combined.next() => {
                         match res {
-                            Ok(event) => IngestActorState::ReceivedSourceEvent(event),
+                            Ok(event) => IngestActorState::ReceivedSourceEvent((source_id.clone(), event)),
                             Err(BroadcastStreamRecvError::Lagged(count)) => IngestActorState::Lagged((source_id.clone(), count))
                         }
                     },
@@ -99,15 +99,26 @@ where
 
             match next_state {
                 IngestActorState::ReceivedCommand(cmd) => {
-                    let response = self.handle_command(cmd);
+                    let response = self.handle_command(cmd).await;
 
                     self.msg_tx.send(Message::CommandResponse(response))?;
                 }
-                IngestActorState::ReceivedSourceEvent(event) => {
-                    if let Err(e) = self.forward_event(event).await {
-                        tracing::error!("Error while forwarding source event: {:?}", e);
+                IngestActorState::ReceivedSourceEvent((source_id, event)) => match event {
+                    SourceMessage::Result(event) => {
+                        if let Err(e) = self.forward_event(event).await {
+                            tracing::error!("Error while forwarding source event: {:?}", e);
+                        }
                     }
-                }
+                    SourceMessage::MetadataChanged(message) => {
+                        if let Some(_) = self.subscriptions.remove(&source_id) {
+                            self.msg_tx
+                                .send(Message::Notice(Notice::SubscriptionClosed {
+                                    source: source_id,
+                                    message: Some(message),
+                                }))?;
+                        }
+                    }
+                },
                 IngestActorState::Lagged((source_id, count)) => {
                     tracing::warn!("Actor lagged behind by {} messages for source {}. Continuing to read from oldest available message", count, source_id);
 
@@ -130,7 +141,7 @@ where
         Ok(())
     }
 
-    fn handle_command(&mut self, command: Command) -> CommandResponse {
+    async fn handle_command(&mut self, command: Command) -> CommandResponse {
         match command {
             Command::Subscribe { source_id } => match self.subscriptions.entry(source_id.clone()) {
                 btree_map::Entry::Occupied(_) => CommandResponse::SubscribeError {
@@ -201,13 +212,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::source::SourceMessage;
+
     use super::*;
     use std::time::Duration;
     use tokio::sync::broadcast::{Receiver, Sender};
 
     #[derive(Debug, Clone)]
     struct TestSource {
-        tx: Sender<TestMessage>,
+        tx: Sender<SourceMessage<TestMessage>>,
         source_id: SourceId,
     }
 
@@ -236,9 +249,9 @@ mod tests {
     }
 
     impl Source for TestSource {
-        type Message = TestMessage;
+        type Result = TestMessage;
 
-        fn subscribe(&self) -> Receiver<Self::Message> {
+        fn subscribe(&self) -> Receiver<SourceMessage<Self::Result>> {
             self.tx.subscribe()
         }
 
@@ -283,14 +296,14 @@ mod tests {
     ) -> (
         UnboundedSender<Command>,
         UnboundedReceiver<Message<TestMessage>>,
-        Sender<TestMessage>,
+        Sender<SourceMessage<TestMessage>>,
         tokio::task::JoinHandle<anyhow::Result<()>>,
     ) {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
         let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message<TestMessage>>();
 
         let (source_tx, _) =
-            tokio::sync::broadcast::channel::<TestMessage>(source_channel_capacity);
+            tokio::sync::broadcast::channel::<SourceMessage<TestMessage>>(source_channel_capacity);
 
         let mut sources = BTreeMap::new();
         sources.extend(test_source_ids.into_iter().map(|source_id| {
@@ -452,7 +465,9 @@ mod tests {
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
         for _ in 0..10 {
-            source_tx.send(TestMessage { payload: None }).unwrap();
+            source_tx
+                .send(SourceMessage::Result(TestMessage { payload: None }))
+                .unwrap();
         }
 
         // TODO: Is there a better way to ensure the actor does not forward any messages?
@@ -486,7 +501,9 @@ mod tests {
         let num_messages = 10;
 
         for _ in 0..num_messages {
-            source_tx.send(TestMessage { payload: None }).unwrap();
+            source_tx
+                .send(SourceMessage::Result(TestMessage { payload: None }))
+                .unwrap();
         }
 
         let received_all_messages = {
@@ -527,7 +544,9 @@ mod tests {
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
         for _ in 0..10 {
-            source_tx.send(TestMessage { payload: None }).unwrap();
+            source_tx
+                .send(SourceMessage::Result(TestMessage { payload: None }))
+                .unwrap();
         }
 
         let received_all_messages = {
@@ -581,9 +600,9 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
                 source_tx
-                    .send(TestMessage {
+                    .send(SourceMessage::Result(TestMessage {
                         payload: Some(i.to_string().as_bytes().to_owned()),
-                    })
+                    }))
                     .unwrap();
             }
         });
