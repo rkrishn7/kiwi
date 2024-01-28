@@ -8,13 +8,15 @@ jobs:
     parameters:
       module:
         type: string
-      name:
+      test:
         type: string
     docker:
       - image: cimg/rust:1.73.0
+      - image: confluentinc/cp-zookeeper:latest
+        environment:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
       - image: confluentinc/cp-kafka:latest
-        depends_on:
-          - zookeeper
         environment:
           KAFKA_BROKER_ID: 1
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -23,10 +25,6 @@ jobs:
           KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
           KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      - image: confluentinc/cp-zookeeper:latest
-        environment:
-          ZOOKEEPER_CLIENT_PORT: 2181
-          ZOOKEEPER_TICK_TIME: 2000
 
     working_directory: ~/repo
 
@@ -47,7 +45,7 @@ jobs:
             - target
 
       # Run the test
-      - run: cargo test --test '<< parameters.module >>' -- --nocapture --test-threads=1 --test '<< parameters.name >>'
+      - run: cargo test --test '<< parameters.module >>' -- --nocapture --test-threads=1 --test '<< parameters.test >>'
 
 workflows:
   kafka:
@@ -56,4 +54,4 @@ workflows:
           matrix:
             parameters:
               module: ["kafka"]
-              name: ["test_kafka_source"]
+              test: ["test_kafka_source"]
