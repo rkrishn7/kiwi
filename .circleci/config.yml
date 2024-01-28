@@ -1,0 +1,59 @@
+version: 2.1
+
+orbs:
+  rust: circleci/rust@1.0.0
+
+jobs:
+  integration-test:
+    parameters:
+      module:
+        type: string
+      name:
+        type: string
+    docker:
+      - image: cimg/rust:1.73.0
+      - image: confluentinc/cp-kafka:latest
+        depends_on:
+          - zookeeper
+        environment:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      - image: confluentinc/cp-zookeeper:latest
+        environment:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+
+      # Dependency caching
+      - restore_cache:
+          keys:
+            - cargo-v1-{{ checksum "Cargo.lock" }}
+
+      - run: cargo build --verbose
+
+      - save_cache:
+          key: cargo-v1-{{ checksum "Cargo.lock" }}
+          paths:
+            - /usr/local/cargo/registry
+            - target
+
+      # Run the test
+      - run: cargo test --test '<< parameters.module >>' -- --nocapture --test-threads=1 --test '<< parameters.name >>'
+
+workflows:
+  kafka:
+    jobs:
+      - integration-test:
+          matrix:
+            parameters:
+              module: ["kafka"]
+              name: ["test_kafka_source"]

@@ -74,6 +74,8 @@ where
                     );
                 }
             }
+
+            tracing::info!("{} disconnected", addr);
         });
     }
 
@@ -173,6 +175,9 @@ where
                                 }
                             },
                             ProtocolMessage::Binary(_) => Err(KiwiProtocolError::UnsupportedCommandForm),
+                            ProtocolMessage::Close(_) => {
+                                break;
+                            },
                             // Handling of Ping/Close messages are delegated to tungstenite
                             _ => continue,
                         };
