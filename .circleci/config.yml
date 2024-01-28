@@ -20,6 +20,7 @@ jobs:
         environment:
           KAFKA_BROKER_ID: 1
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ZOOKEEPER_CONNECTION_TIMEOUT_MS: 300000
           KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092
           KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT
           KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -36,12 +37,11 @@ jobs:
           keys:
             - cargo-v1-{{ checksum "Cargo.lock" }}
 
-      - run: cargo build --verbose
+      - run: cargo build
 
       - save_cache:
           key: cargo-v1-{{ checksum "Cargo.lock" }}
           paths:
-            - /usr/local/cargo/registry
             - target
 
       # Run the test
