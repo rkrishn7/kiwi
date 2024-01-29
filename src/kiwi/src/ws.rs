@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::{net::SocketAddr, sync::Arc};
 
+use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -30,7 +31,7 @@ pub async fn serve<S, M, I, A>(
     authenticate_hook: Option<A>,
 ) -> anyhow::Result<()>
 where
-    S: Source<Message = M> + Send + Sync + 'static,
+    S: Source<Result = M> + Send + Sync + 'static,
     M: Into<intercept::types::EventCtx>
         + Into<SourceResult>
         + MutableEvent
@@ -51,14 +52,19 @@ where
         let authenticate_hook = authenticate_hook.clone();
         tokio::spawn(async move {
             match perform_handshake(stream, authenticate_hook).await {
-                Ok((ws_stream, auth_ctx)) => {
+                Ok((mut ws_stream, auth_ctx)) => {
                     tracing::info!("New WebSocket connection: {}", addr);
 
                     let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx { addr });
 
-                    let _ =
-                        drive_stream(ws_stream, sources, auth_ctx, connection_ctx, intercept_hook)
-                            .await;
+                    let _ = drive_stream(
+                        &mut ws_stream,
+                        sources,
+                        auth_ctx,
+                        connection_ctx,
+                        intercept_hook,
+                    )
+                    .await;
                 }
                 Err(e) => {
                     tracing::error!(
@@ -68,6 +74,8 @@ where
                     );
                 }
             }
+
+            tracing::info!("{} disconnected", addr);
         });
     }
 
@@ -116,7 +124,7 @@ where
 }
 
 async fn drive_stream<Stream, S, M, I>(
-    mut stream: WebSocketStream<Stream>,
+    stream: &mut WebSocketStream<Stream>,
     sources: Arc<BTreeMap<String, S>>,
     auth_ctx: Option<AuthCtx>,
     connection_ctx: ConnectionCtx,
@@ -124,7 +132,7 @@ async fn drive_stream<Stream, S, M, I>(
 ) -> anyhow::Result<()>
 where
     Stream: AsyncRead + AsyncWrite + Unpin,
-    S: Source<Message = M> + Send + Sync + 'static,
+    S: Source<Result = M> + Send + Sync + 'static,
     M: Into<intercept::types::EventCtx>
         + Into<SourceResult>
         + MutableEvent
@@ -167,6 +175,9 @@ where
                                 }
                             },
                             ProtocolMessage::Binary(_) => Err(KiwiProtocolError::UnsupportedCommandForm),
+                            ProtocolMessage::Close(_) => {
+                                break;
+                            },
                             // Handling of Ping/Close messages are delegated to tungstenite
                             _ => continue,
                         };
@@ -203,9 +214,16 @@ where
             msg = msg_rx.recv() => {
                 match msg {
                     Some(msg) => {
+                        if let Message::Result(msg) = &msg {
+                            tracing::info!("Sending message to client: {:?}", msg.payload.as_ref().map(|p| std::str::from_utf8(&base64::engine::general_purpose::STANDARD
+                                .decode(p)
+                                .unwrap()).unwrap().to_owned()));
+                        }
+
                         let txt = serde_json::to_string(&msg).expect("failed to serialize message");
 
-                        if let Err(e) = stream.feed(ProtocolMessage::Text(txt)).await {
+                        // TODO: Batch here and flush on an interval?
+                        if let Err(e) = stream.send(ProtocolMessage::Text(txt)).await {
                             tracing::error!("Encountered unexpected error while feeding data to WS stream: {}", e);
                         }
                     }
@@ -220,4 +238,83 @@ where
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        hook::intercept::{types::Action, wasm::WasmInterceptHook},
+        source::kafka::KafkaTopicSource,
+    };
+
+    use super::*;
+    use futures::stream::FusedStream;
+    use std::{
+        collections::BTreeMap,
+        task::{Context, Poll},
+    };
+    use tokio::io::{AsyncWriteExt, ReadBuf};
+    use tokio_tungstenite::tungstenite::protocol::Role;
+    use tokio_tungstenite::WebSocketStream;
+
+    use std::{io, io::Cursor, pin::Pin};
+
+    struct TestInterceptHook {}
+
+    impl Intercept for TestInterceptHook {
+        fn intercept(&self, _: &crate::hook::intercept::types::Context) -> anyhow::Result<Action> {
+            Ok(Action::Forward)
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_invalid_command() {
+        let (_, mut incoming) = tokio::io::duplex(1024);
+        incoming
+            .write(&[
+                0x89, 0x02, 0x01, 0x02, 0x8a, 0x01, 0x03, 0x01, 0x07, 0x48, 0x65, 0x6c, 0x6c, 0x6f,
+                0x2c, 0x20, 0x80, 0x06, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x82, 0x03, 0x01, 0x02,
+                0x03,
+            ])
+            .await
+            .unwrap();
+        // let incoming = Cursor::new(Vec::with_capacity(1024));
+        let mut stream = WebSocketStream::from_raw_socket(incoming, Role::Client, None).await;
+
+        let sources: BTreeMap<String, KafkaTopicSource> = BTreeMap::new();
+        let auth_ctx = None;
+        let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx {
+            addr: "127.0.0.1:3000".parse().unwrap(),
+        });
+
+        // stream
+        //     .send(tokio_tungstenite::tungstenite::protocol::Message::Text(
+        //         serde_json::to_string(&Command::Subscribe {
+        //             source_id: "test".into(),
+        //         })
+        //         .unwrap(),
+        //     ))
+        //     .await
+        //     .unwrap();
+
+        tokio::select! {
+            biased;
+
+            _ = drive_stream(
+                &mut stream,
+                Arc::new(sources),
+                auth_ctx,
+                connection_ctx,
+                None::<WasmInterceptHook>,
+            ) => (),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                panic!("Expected stream to terminate");
+            }
+        }
+
+        // TODO: Assert the stream was closed with the appropriate error
+
+        assert!(stream.is_terminated());
+    }
 }

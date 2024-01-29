@@ -48,7 +48,8 @@ async fn main() -> anyhow::Result<()> {
         topics.iter().map(|topic| topic.name.clone()),
         group_prefix.clone(),
         bootstrap_servers.clone(),
-    );
+    )
+    .await;
 
     let intercept_hook = config
         .hooks

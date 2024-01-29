@@ -5,10 +5,18 @@ use tokio::sync::broadcast::Receiver;
 
 pub mod kafka;
 
-pub trait Source {
-    type Message;
+#[derive(Clone, Debug)]
+pub enum SourceMessage<T> {
+    /// A source-specific event
+    Result(T),
+    /// Source metadata has changed
+    MetadataChanged(String),
+}
 
-    fn subscribe(&self) -> Receiver<Self::Message>;
+pub trait Source {
+    type Result;
+
+    fn subscribe(&self) -> Receiver<SourceMessage<Self::Result>>;
 
     fn source_id(&self) -> &SourceId;
 }

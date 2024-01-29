@@ -34,7 +34,14 @@ pub enum CommandResponse {
 /// An info or error message that may be pushed to a client. A notice, in many
 /// cases is not issued as a direct result of a command
 pub enum Notice {
-    Lag { source: SourceId, count: u64 },
+    Lag {
+        source: SourceId,
+        count: u64,
+    },
+    SubscriptionClosed {
+        source: SourceId,
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -133,6 +140,17 @@ mod tests {
         assert_eq!(
             serialized,
             r#"{"type":"NOTICE","data":{"type":"LAG","source":"test","count":1}}"#
+        );
+
+        let message: Message<()> = Message::Notice(Notice::SubscriptionClosed {
+            source: "test".into(),
+            message: Some("New partition added".to_string()),
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","source":"test","message":"New partition added"}}"#
         );
 
         #[derive(Serialize)]

@@ -1,5 +1,6 @@
 use std::{fs::File, io::Read};
 
+use anyhow::Context;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,7 +49,7 @@ pub struct Server {
 
 impl Config {
     pub fn parse(path: &str) -> Result<Self, anyhow::Error> {
-        let mut file = File::open(path)?;
+        let mut file = File::open(path).context("failed to open kiwi config")?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
 

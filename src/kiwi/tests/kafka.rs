@@ -1,57 +1,86 @@
 use base64::Engine;
 use futures::{SinkExt, StreamExt};
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::{
+    admin::{AdminClient, AdminOptions, NewPartitions},
+    client::DefaultClientContext,
+    producer::{FutureProducer, FutureRecord},
+};
 use std::{io::Write, process, time::Duration};
 use tokio_tungstenite::{connect_async, tungstenite};
 
 use kiwi::{
-    protocol::{Command, CommandResponse, Message},
+    protocol::{Command, CommandResponse, Message, Notice},
     source::SourceResult,
 };
 
 use tempfile::NamedTempFile;
 
 // Helper function to start the kiwi process.
-fn start_kiwi(config: &str) -> anyhow::Result<std::process::Child> {
+fn start_kiwi(config_file: &str) -> anyhow::Result<std::process::Child> {
     // Expects `kiwi` to be in the PATH
     let mut cmd = process::Command::new("kiwi");
 
-    let mut config_file = NamedTempFile::new()?;
-    config_file
-        .as_file_mut()
-        .write_all(config.as_bytes())
-        .unwrap();
-
-    cmd.args(&[
-        "--config",
-        config_file.path().to_str().expect("path should be valid"),
-        "--log-level",
-        "debug",
-    ]);
-    let child = cmd.spawn().unwrap();
+    cmd.args(&["--config", config_file, "--log-level", "debug"]);
+    let child = cmd.spawn().expect("kiwi failed to start");
 
     Ok(child)
 }
 
-#[ignore = "todo"]
+fn create_temp_config(contents: &str) -> anyhow::Result<NamedTempFile> {
+    let mut config_file = NamedTempFile::new()?;
+    config_file.as_file_mut().write_all(contents.as_bytes())?;
+
+    Ok(config_file)
+}
+
+fn create_admin_client() -> rdkafka::admin::AdminClient<DefaultClientContext> {
+    let mut admin_client_config = rdkafka::ClientConfig::new();
+
+    admin_client_config
+        .set("bootstrap.servers", "kafka:19092")
+        .set("message.timeout.ms", "5000");
+
+    let admin_client: rdkafka::admin::AdminClient<DefaultClientContext> =
+        admin_client_config.create().unwrap();
+
+    admin_client
+}
+
+async fn create_topic(topic_name: &str, admin_client: &AdminClient<DefaultClientContext>) {
+    let topic =
+        rdkafka::admin::NewTopic::new(topic_name, 1, rdkafka::admin::TopicReplication::Fixed(1));
+
+    admin_client
+        .create_topics(&[topic], &AdminOptions::new())
+        .await
+        .expect(format!("Failed to create topic {}", topic_name).as_str());
+}
+
 #[tokio::test]
 async fn test_kafka_source() -> anyhow::Result<()> {
-    let config = r#"
-    sources:
-        kafka:
-            group_prefix: ''
-            bootstrap_servers:
-                - 'localhost:9092'
-            topics:
-                - name: topic1
-  
-    server:
-        address: '127.0.0.1:8000'
-    "#;
+    let config = create_temp_config(
+        r#"
+sources:
+    kafka:
+        bootstrap_servers:
+            - 'kafka:19092'
+        topics:
+            - name: topic1
 
-    let mut proc = start_kiwi(config)?;
+server:
+    address: '127.0.0.1:8000'
+    "#,
+    )
+    .unwrap();
 
-    let (ws_stream, _) = connect_async("http://127.0.0.1:8000")
+    let admin_client = create_admin_client();
+    create_topic("topic1", &admin_client).await;
+
+    let mut proc = start_kiwi(config.path().to_str().unwrap())?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let (ws_stream, _) = connect_async("ws://127.0.0.1:8000")
         .await
         .expect("Failed to connect");
 
@@ -80,7 +109,7 @@ async fn test_kafka_source() -> anyhow::Result<()> {
 
     let producer = tokio::spawn(async {
         let producer: FutureProducer = rdkafka::config::ClientConfig::new()
-            .set("bootstrap.servers", "localhost:9092")
+            .set("bootstrap.servers", "kafka:19092")
             .set("message.timeout.ms", "5000")
             .create()
             .expect("Producer creation error");
@@ -99,8 +128,8 @@ async fn test_kafka_source() -> anyhow::Result<()> {
 
     let reader = tokio::spawn(async move {
         let mut count = 0;
-        while let Some(msg) = read.next().await {
-            let msg = msg.unwrap();
+        while count < 1000 {
+            let msg = read.next().await.unwrap().unwrap();
             let msg: Message<SourceResult> = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
 
             match msg {
@@ -115,14 +144,91 @@ async fn test_kafka_source() -> anyhow::Result<()> {
                     );
                     count += 1;
                 }
-                _ => panic!("Expected message"),
+                m => panic!("Expected message. Received {:?}", m),
             }
         }
-
-        assert_eq!(count, 1000, "failed to receive all messages");
     });
 
-    let _ = futures::join!(producer, reader);
+    assert!(matches!(futures::join!(producer, reader), (Ok(_), Ok(_))));
+
+    let _ = proc.kill();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_closes_subscription_on_changed_metadata() -> anyhow::Result<()> {
+    let config = create_temp_config(
+        r#"
+sources:
+    kafka:
+        bootstrap_servers:
+            - 'kafka:19092'
+        topics:
+            - name: topic1
+
+server:
+    address: '127.0.0.1:8000'
+    "#,
+    )
+    .unwrap();
+
+    let admin_client = create_admin_client();
+    create_topic("topic1", &admin_client).await;
+
+    let mut proc = start_kiwi(config.path().to_str().unwrap())?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let (ws_stream, _) = connect_async("ws://127.0.0.1:8000")
+        .await
+        .expect("Failed to connect");
+
+    let (mut write, mut read) = ws_stream.split();
+
+    let cmd = Command::Subscribe {
+        source_id: "topic1".into(),
+    };
+
+    write
+        .send(tungstenite::protocol::Message::Text(
+            serde_json::to_string(&cmd).unwrap(),
+        ))
+        .await?;
+
+    let resp = read.next().await.expect("Expected response")?;
+
+    let resp: Message<()> = serde_json::from_str(&resp.to_text().unwrap())?;
+
+    match resp {
+        Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) => {
+            assert_eq!(source_id, "topic1".to_string());
+        }
+        _ => panic!("Expected subscribe ok"),
+    }
+
+    let mut partitions = Vec::new();
+    partitions.push(&NewPartitions {
+        topic_name: "topic1",
+        new_partition_count: 2,
+        assignment: None,
+    });
+
+    admin_client
+        .create_partitions(partitions, &AdminOptions::new())
+        .await
+        .unwrap();
+
+    let resp = read.next().await.expect("Expected response")?;
+
+    let resp: Message<()> = serde_json::from_str(&resp.to_text().unwrap())?;
+
+    match resp {
+        Message::Notice(Notice::SubscriptionClosed { source, message: _ }) => {
+            assert_eq!(source, "topic1".to_string());
+        }
+        _ => panic!("Expected subscribe closed"),
+    }
 
     let _ = proc.kill();
 
