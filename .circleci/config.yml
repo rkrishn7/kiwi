@@ -5,14 +5,14 @@ orbs:
 
 jobs:
   integration-test:
-    machine:
-      image: ubuntu-2004:current
-      docker_layer_caching: true
     parameters:
       module:
         type: string
       test:
         type: string
+    machine:
+      image: ubuntu-2004:current
+      docker_layer_caching: true
     working_directory: ~/kiwi
     steps:
       - checkout
@@ -30,11 +30,11 @@ jobs:
           command: docker-compose up -d && sleep 10
       # Run cargo test in a Docker container
       - run:
-        name: Run cargo test
-        command: |
-          echo << parameters.module >> << parameters.test >>
-          NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
-          docker run --network $NETWORK_NAME --name kiwi-tests -v $(pwd):/project --workdir /project rust:1.73.0 cargo test
+          name: Run cargo test
+          command: |
+            echo << parameters.module >> << parameters.test >>
+            NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
+            docker run --network $NETWORK_NAME --name kiwi-tests -v $(pwd):/project --workdir /project rust:1.73.0 cargo test
 
 workflows:
   kafka:
