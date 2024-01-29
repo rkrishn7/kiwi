@@ -118,7 +118,7 @@ server:
                     );
                     count += 1;
                 }
-                _ => panic!("Expected message"),
+                m => panic!("Expected message. Received {:?}", m),
             }
         }
     });
