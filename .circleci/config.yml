@@ -13,20 +13,19 @@ jobs:
     working_directory: ~/kiwi
     steps:
       - checkout
-      - run:
-          name: Install Docker Compose
-          environment:
-            COMPOSE_VERSION: '1.29.2'
-          command: |
-            curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o ~/docker-compose
-            chmod +x ~/docker-compose
-            sudo mv ~/docker-compose /usr/local/bin/docker-compose
       - setup_remote_docker:
           docker_layer_caching: true
       - run:
           name: Start all services declared in docker-compose.yml
           # TODO: Implement a better way to wait for Kafka to be ready
           command: docker-compose up -d && sleep 10
+      # Run cargo test in a Docker container
+      - run:
+          name: Run cargo test
+          command: |
+            echo << parameters.module >> << parameters.test >>
+            NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
+            docker run --network $NETWORK_NAME --name kiwi-tests -v $(pwd):/project --workdir /project rust:1.73.0 cargo test
 
 workflows:
   kafka:
