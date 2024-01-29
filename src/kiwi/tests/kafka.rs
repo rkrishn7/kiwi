@@ -50,8 +50,6 @@ server:
     )
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(300)).await;
-
     let mut proc = start_kiwi(config.path().to_str().unwrap())?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
