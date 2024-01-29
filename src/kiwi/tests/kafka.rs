@@ -1,7 +1,7 @@
 use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use rdkafka::{
-    admin::{AdminOptions, NewPartitions},
+    admin::{AdminClient, AdminOptions, NewPartitions},
     client::DefaultClientContext,
     producer::{FutureProducer, FutureRecord},
 };
@@ -33,6 +33,29 @@ fn create_temp_config(contents: &str) -> anyhow::Result<NamedTempFile> {
     Ok(config_file)
 }
 
+fn create_admin_client() -> rdkafka::admin::AdminClient<DefaultClientContext> {
+    let mut admin_client_config = rdkafka::ClientConfig::new();
+
+    admin_client_config
+        .set("bootstrap.servers", "kafka:19092")
+        .set("message.timeout.ms", "5000");
+
+    let admin_client: rdkafka::admin::AdminClient<DefaultClientContext> =
+        admin_client_config.create().unwrap();
+
+    admin_client
+}
+
+async fn create_topic(topic_name: &str, admin_client: &AdminClient<DefaultClientContext>) {
+    let topic =
+        rdkafka::admin::NewTopic::new(topic_name, 1, rdkafka::admin::TopicReplication::Fixed(1));
+
+    admin_client
+        .create_topics(&[topic], &AdminOptions::new())
+        .await
+        .expect(format!("Failed to create topic {}", topic_name).as_str());
+}
+
 #[tokio::test]
 async fn test_kafka_source() -> anyhow::Result<()> {
     let config = create_temp_config(
@@ -49,6 +72,9 @@ server:
     "#,
     )
     .unwrap();
+
+    let admin_client = create_admin_client();
+    create_topic("topic1", &admin_client).await;
 
     let mut proc = start_kiwi(config.path().to_str().unwrap())?;
 
@@ -147,6 +173,9 @@ server:
     )
     .unwrap();
 
+    let admin_client = create_admin_client();
+    create_topic("topic1", &admin_client).await;
+
     let mut proc = start_kiwi(config.path().to_str().unwrap())?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -177,15 +206,6 @@ server:
         }
         _ => panic!("Expected subscribe ok"),
     }
-
-    let mut admin_client_config = rdkafka::ClientConfig::new();
-
-    admin_client_config
-        .set("bootstrap.servers", "kafka:19092")
-        .set("message.timeout.ms", "5000");
-
-    let admin_client: rdkafka::admin::AdminClient<DefaultClientContext> =
-        admin_client_config.create().unwrap();
 
     let mut partitions = Vec::new();
     partitions.push(&NewPartitions {
