@@ -110,7 +110,7 @@ where
                         }
                     }
                     SourceMessage::MetadataChanged(message) => {
-                        if let Some(_) = self.subscriptions.remove(&source_id) {
+                        if self.subscriptions.remove(&source_id).is_some() {
                             self.msg_tx
                                 .send(Message::Notice(Notice::SubscriptionClosed {
                                     source: source_id,

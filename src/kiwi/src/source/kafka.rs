@@ -7,7 +7,6 @@ use futures::stream::StreamExt;
 use futures::{future::Fuse, FutureExt};
 use maplit::btreemap;
 use rdkafka::client::{Client, DefaultClientContext};
-use rdkafka::consumer::BaseConsumer;
 use rdkafka::util::Timeout;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -118,6 +117,7 @@ impl Source for KafkaTopicSource {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Creates new consumers for partitions that have not yet been observed.
 /// Each consumer will start consuming from the partition's high watermark.
 async fn reconcile_partition_consumers<T: Into<Timeout> + Clone + Send + Sync + 'static>(
@@ -187,7 +187,7 @@ async fn reconcile_partition_consumers<T: Into<Timeout> + Clone + Send + Sync + 
                 let (shutdown_trigger, shutdown_rx) = oneshot::channel::<()>();
 
                 let partition_consumer = PartitionConsumer::new(
-                    &topic,
+                    topic,
                     partition,
                     rdkafka::Offset::Offset(high),
                     client_config,
@@ -227,7 +227,7 @@ impl KafkaTopicSource {
         // Kafka only provides producer and consumer clients. We use a producer
         // for querying metadata and watermarks as they are allegedly more lightweight
         let client = Arc::new(Mutex::new(rdkafka::client::Client::new(
-            &client_config,
+            client_config,
             native_config,
             rdkafka::types::RDKafkaType::RD_KAFKA_PRODUCER,
             DefaultClientContext,
