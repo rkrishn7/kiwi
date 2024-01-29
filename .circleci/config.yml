@@ -47,4 +47,6 @@ workflows:
           matrix:
             parameters:
               module: ["kafka"]
-              test: ["test_kafka_source"]
+              test:
+                - "test_kafka_source"
+                - "test_closes_subscription_on_changed_metadata"
