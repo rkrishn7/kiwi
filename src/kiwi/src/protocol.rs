@@ -150,7 +150,7 @@ mod tests {
         let serialized = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized,
-            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","source":"test","message":""New partition added"}}"#
+            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","source":"test","message":"New partition added"}}"#
         );
 
         #[derive(Serialize)]

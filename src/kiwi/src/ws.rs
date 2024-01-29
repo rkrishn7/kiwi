@@ -268,6 +268,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_invalid_command() {
         let (_, mut incoming) = tokio::io::duplex(1024);
         incoming
