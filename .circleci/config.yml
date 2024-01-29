@@ -35,9 +35,9 @@ jobs:
       - run:
           name: Run Test
           command: |
-            echo 'Running: << parameters.module >> << parameters.test >>'
+            echo 'Running: << parameters.module >>::<< parameters.test >>'
             NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
-            echo 'Network: $NETWORK_NAME'
+            echo Network: $NETWORK_NAME
             docker run --network $NETWORK_NAME --name kiwi-tests kiwi:latest cargo test --test '<< parameters.module >>' -- --nocapture --test-threads 1 --test '<< parameters.test >>'
 
 workflows:
