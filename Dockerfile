@@ -23,8 +23,9 @@ FROM debian:buster-slim
 WORKDIR /app
 
 # Install libssl (Rust links against this library)
+# Install cmake (For building librdkafka)
 RUN apt-get update && \
-    apt-get install -y libssl-dev ca-certificates && \
+    apt-get install -y libssl-dev ca-certificates cmake && \
     apt-get clean
 
 # Copy the binary from the builder stage

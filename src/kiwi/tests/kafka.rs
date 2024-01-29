@@ -40,7 +40,7 @@ async fn test_kafka_source() -> anyhow::Result<()> {
 sources:
     kafka:
         bootstrap_servers:
-            - 'localhost:9092'
+            - 'kafka:9092'
         topics:
             - name: topic1
 
@@ -85,7 +85,7 @@ server:
 
     let producer = tokio::spawn(async {
         let producer: FutureProducer = rdkafka::config::ClientConfig::new()
-            .set("bootstrap.servers", "localhost:9092")
+            .set("bootstrap.servers", "kafka:9092")
             .set("message.timeout.ms", "5000")
             .create()
             .expect("Producer creation error");
@@ -139,7 +139,7 @@ async fn test_closes_subscription_on_changed_metadata() -> anyhow::Result<()> {
 sources:
     kafka:
         bootstrap_servers:
-            - 'localhost:9092'
+            - 'kafka:9092'
         topics:
             - name: topic1
 
@@ -183,7 +183,7 @@ server:
     let mut admin_client_config = rdkafka::ClientConfig::new();
 
     admin_client_config
-        .set("bootstrap.servers", "localhost:9092")
+        .set("bootstrap.servers", "kafka:9092")
         .set("message.timeout.ms", "5000");
 
     let admin_client: rdkafka::admin::AdminClient<DefaultClientContext> =
