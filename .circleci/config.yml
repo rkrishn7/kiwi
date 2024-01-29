@@ -35,21 +35,6 @@ jobs:
             NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
             docker run --network $NETWORK_NAME --name kiwi-tests -v $(pwd):/project --workdir /project rust:1.73.0 cargo test
 
-      # Dependency caching
-      # - restore_cache:
-      #     keys:
-      #       - cargo-v1-{{ checksum "Cargo.lock" }}
-
-      # - run: cargo build
-
-      # - save_cache:
-      #     key: cargo-v1-{{ checksum "Cargo.lock" }}
-      #     paths:
-      #       - target
-
-      # # Run the test
-      # - run: cargo test --test '<< parameters.module >>' -- --nocapture --test-threads=1 --test '<< parameters.test >>'
-
 workflows:
   kafka:
     jobs:
