@@ -1,12 +1,10 @@
 use std::net::SocketAddr;
 
-use crate::event::EventPayload;
-
 #[derive(Debug, Clone)]
 pub enum Action {
     Forward,
     Discard,
-    Transform(EventPayload),
+    Transform(Option<Vec<u8>>),
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +43,7 @@ pub enum EventCtx {
 
 #[derive(Debug, Clone)]
 pub struct KafkaEventCtx {
-    pub(crate) payload: EventPayload,
+    pub(crate) payload: Option<Vec<u8>>,
     pub(crate) topic: String,
     pub(crate) timestamp: Option<i64>,
     pub(crate) partition: i32,

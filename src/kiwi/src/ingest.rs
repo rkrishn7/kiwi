@@ -8,25 +8,25 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::event::MutableEvent;
 use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
-use crate::source::{Source, SourceId, SourceMessage};
+use crate::source::{Source, SourceId, SourceMessage, SourceResult};
 
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
 /// - Reading events from subscribed sources, processing them, and
 ///   forwarding them along its active subscriptions
-pub struct IngestActor<S, T, M, I> {
+pub struct IngestActor<S, I> {
     cmd_rx: UnboundedReceiver<Command>,
-    msg_tx: UnboundedSender<Message<M>>,
+    msg_tx: UnboundedSender<Message>,
     sources: Arc<BTreeMap<SourceId, S>>,
     /// Subscriptions this actor currently maintains for its handle
-    subscriptions: BTreeMap<SourceId, BroadcastStream<SourceMessage<T>>>,
+    subscriptions: BTreeMap<SourceId, BroadcastStream<SourceMessage>>,
     connection_ctx: intercept::types::ConnectionCtx,
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
-    pre_forward: Option<I>,
+    /// Plugin that is executed before forwarding events to the client
+    intercept: Option<I>,
 }
 
 #[derive(Debug)]
@@ -40,20 +40,18 @@ enum IngestActorState<T> {
     Lagged((SourceId, u64)),
 }
 
-impl<S, T, M, P> IngestActor<S, T, M, P>
+impl<S, I> IngestActor<S, I>
 where
-    M: Clone + Send + Sync + 'static,
-    S: Source<Result = T>,
-    T: Into<intercept::types::EventCtx> + Into<M> + MutableEvent + Debug + Clone + Send + 'static,
-    P: Intercept + Clone + Send + 'static,
+    S: Source,
+    I: Intercept + Clone + Send + 'static,
 {
     pub fn new(
         sources: Arc<BTreeMap<String, S>>,
         cmd_rx: UnboundedReceiver<Command>,
-        msg_tx: UnboundedSender<Message<M>>,
+        msg_tx: UnboundedSender<Message>,
         connection_ctx: intercept::types::ConnectionCtx,
         auth_ctx: Option<intercept::types::AuthCtx>,
-        pre_forward: Option<P>,
+        intercept: Option<I>,
     ) -> Self {
         Self {
             cmd_rx,
@@ -62,7 +60,7 @@ where
             connection_ctx,
             auth_ctx,
             subscriptions: Default::default(),
-            pre_forward,
+            intercept,
         }
     }
 
@@ -177,7 +175,7 @@ where
         }
     }
 
-    async fn forward_event(&mut self, event: T) -> anyhow::Result<()> {
+    async fn forward_event(&mut self, mut event: SourceResult) -> anyhow::Result<()> {
         let plugin_event_ctx: intercept::types::EventCtx = event.clone().into();
         let plugin_ctx = intercept::types::Context {
             auth: self.auth_ctx.clone(),
@@ -185,7 +183,7 @@ where
             event: plugin_event_ctx,
         };
 
-        let action = if let Some(plugin) = self.pre_forward.clone() {
+        let action = if let Some(plugin) = self.intercept.clone() {
             let result =
                 tokio::task::spawn_blocking(move || plugin.intercept(&plugin_ctx)).await??;
 
@@ -200,9 +198,14 @@ where
                 self.msg_tx.send(Message::Result(event.into()))?;
             }
             Some(intercept::types::Action::Transform(payload)) => {
-                let transformed = event.set_payload(payload);
+                // Update event with new payload
+                match event {
+                    SourceResult::Kafka(ref mut kafka_event) => {
+                        kafka_event.payload = payload;
+                    }
+                }
 
-                self.msg_tx.send(Message::Result(transformed.into()))?;
+                self.msg_tx.send(Message::Result(event.into()))?;
             }
         }
 
@@ -220,38 +223,12 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestSource {
-        tx: Sender<SourceMessage<TestMessage>>,
+        tx: Sender<SourceMessage>,
         source_id: SourceId,
     }
 
-    #[derive(Debug, Clone)]
-    struct TestMessage {
-        payload: Option<Vec<u8>>,
-    }
-
-    impl From<TestMessage> for intercept::types::EventCtx {
-        fn from(value: TestMessage) -> Self {
-            Self::Kafka(intercept::types::KafkaEventCtx {
-                payload: value.payload,
-                topic: "test".to_string(),
-                timestamp: None,
-                partition: 0,
-                offset: 0,
-            })
-        }
-    }
-
-    impl MutableEvent for TestMessage {
-        fn set_payload(mut self, payload: Option<Vec<u8>>) -> Self {
-            self.payload = payload;
-            self
-        }
-    }
-
     impl Source for TestSource {
-        type Result = TestMessage;
-
-        fn subscribe(&self) -> Receiver<SourceMessage<Self::Result>> {
+        fn subscribe(&self) -> Receiver<SourceMessage> {
             self.tx.subscribe()
         }
 
@@ -271,6 +248,17 @@ mod tests {
         ) -> anyhow::Result<intercept::types::Action> {
             Ok(intercept::types::Action::Discard)
         }
+    }
+
+    fn test_source_result() -> SourceResult {
+        SourceResult::Kafka(crate::source::kafka::KafkaSourceResult {
+            key: None,
+            payload: None,
+            topic: "test".to_string(),
+            timestamp: None,
+            partition: 0,
+            offset: 0,
+        })
     }
 
     fn send_subscribe_cmd(cmd_tx: &UnboundedSender<Command>, source_id: &str) {
@@ -295,15 +283,15 @@ mod tests {
         source_channel_capacity: usize,
     ) -> (
         UnboundedSender<Command>,
-        UnboundedReceiver<Message<TestMessage>>,
-        Sender<SourceMessage<TestMessage>>,
+        UnboundedReceiver<Message>,
+        Sender<SourceMessage>,
         tokio::task::JoinHandle<anyhow::Result<()>>,
     ) {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
-        let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message<TestMessage>>();
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
 
         let (source_tx, _) =
-            tokio::sync::broadcast::channel::<SourceMessage<TestMessage>>(source_channel_capacity);
+            tokio::sync::broadcast::channel::<SourceMessage>(source_channel_capacity);
 
         let mut sources = BTreeMap::new();
         sources.extend(test_source_ids.into_iter().map(|source_id| {
@@ -332,10 +320,7 @@ mod tests {
         (cmd_tx, msg_rx, source_tx, handle)
     }
 
-    async fn recv_subscribe_ok(
-        rx: &mut UnboundedReceiver<Message<TestMessage>>,
-        original_source_id: &str,
-    ) {
+    async fn recv_subscribe_ok(rx: &mut UnboundedReceiver<Message>, original_source_id: &str) {
         match rx.recv().await.unwrap() {
             Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) => {
                 assert_eq!(
@@ -350,10 +335,7 @@ mod tests {
         }
     }
 
-    async fn recv_subscribe_err(
-        rx: &mut UnboundedReceiver<Message<TestMessage>>,
-        original_source_id: &str,
-    ) {
+    async fn recv_subscribe_err(rx: &mut UnboundedReceiver<Message>, original_source_id: &str) {
         match rx.recv().await.unwrap() {
             Message::CommandResponse(CommandResponse::SubscribeError { source_id, .. }) => {
                 assert_eq!(
@@ -368,10 +350,7 @@ mod tests {
         }
     }
 
-    async fn recv_unsubscribe_ok(
-        rx: &mut UnboundedReceiver<Message<TestMessage>>,
-        original_source_id: &str,
-    ) {
+    async fn recv_unsubscribe_ok(rx: &mut UnboundedReceiver<Message>, original_source_id: &str) {
         match rx.recv().await.unwrap() {
             Message::CommandResponse(CommandResponse::UnsubscribeOk { source_id }) => {
                 assert_eq!(
@@ -386,10 +365,7 @@ mod tests {
         }
     }
 
-    async fn recv_unsubscribe_err(
-        rx: &mut UnboundedReceiver<Message<TestMessage>>,
-        original_source_id: &str,
-    ) {
+    async fn recv_unsubscribe_err(rx: &mut UnboundedReceiver<Message>, original_source_id: &str) {
         match rx.recv().await.unwrap() {
             Message::CommandResponse(CommandResponse::UnsubscribeError { source_id, .. }) => {
                 assert_eq!(
@@ -404,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn test_actor_completes_on_cmd_rx_drop() {
         let (cmd_tx, _, _, actor_handle) =
-            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100);
+            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100);
 
         // Drop the command channel, which should cause the actor to complete
         drop(cmd_tx);
@@ -466,7 +442,7 @@ mod tests {
 
         for _ in 0..10 {
             source_tx
-                .send(SourceMessage::Result(TestMessage { payload: None }))
+                .send(SourceMessage::Result(test_source_result()))
                 .unwrap();
         }
 
@@ -502,7 +478,7 @@ mod tests {
 
         for _ in 0..num_messages {
             source_tx
-                .send(SourceMessage::Result(TestMessage { payload: None }))
+                .send(SourceMessage::Result(test_source_result()))
                 .unwrap();
         }
 
@@ -545,7 +521,7 @@ mod tests {
 
         for _ in 0..10 {
             source_tx
-                .send(SourceMessage::Result(TestMessage { payload: None }))
+                .send(SourceMessage::Result(test_source_result()))
                 .unwrap();
         }
 
@@ -600,9 +576,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
                 source_tx
-                    .send(SourceMessage::Result(TestMessage {
-                        payload: Some(i.to_string().as_bytes().to_owned()),
-                    }))
+                    .send(SourceMessage::Result(test_source_result()))
                     .unwrap();
             }
         });

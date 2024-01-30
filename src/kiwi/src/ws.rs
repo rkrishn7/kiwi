@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::{net::SocketAddr, sync::Arc};
 
-use base64::Engine as _;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -10,35 +9,27 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::WebSocketStream;
 
-use crate::event::MutableEvent;
 use crate::hook::authenticate::types::Outcome;
 use crate::hook::authenticate::Authenticate;
 use crate::hook::intercept::types::{AuthCtx, ConnectionCtx, WebSocketConnectionCtx};
 use crate::ingest::IngestActor;
 
-use crate::hook::intercept::{self, Intercept};
+use crate::hook::intercept::Intercept;
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
-use crate::source::{Source, SourceResult};
+use crate::source::Source;
 
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMessage};
 
 /// Starts a WebSocket server with the specified configuration
-pub async fn serve<S, M, I, A>(
+pub async fn serve<S, I, A>(
     listen_addr: &SocketAddr,
     sources: Arc<BTreeMap<String, S>>,
     intercept_hook: Option<I>,
     authenticate_hook: Option<A>,
 ) -> anyhow::Result<()>
 where
-    S: Source<Result = M> + Send + Sync + 'static,
-    M: Into<intercept::types::EventCtx>
-        + Into<SourceResult>
-        + MutableEvent
-        + std::fmt::Debug
-        + Clone
-        + Send
-        + 'static,
+    S: Source + Send + Sync + 'static,
     I: Intercept + Clone + Send + Sync + 'static,
     A: Authenticate + Clone + Send + Sync + Unpin + 'static,
 {
@@ -123,7 +114,7 @@ where
     Ok((ws_stream, auth_ctx))
 }
 
-async fn drive_stream<Stream, S, M, I>(
+async fn drive_stream<Stream, S, I>(
     stream: &mut WebSocketStream<Stream>,
     sources: Arc<BTreeMap<String, S>>,
     auth_ctx: Option<AuthCtx>,
@@ -132,17 +123,10 @@ async fn drive_stream<Stream, S, M, I>(
 ) -> anyhow::Result<()>
 where
     Stream: AsyncRead + AsyncWrite + Unpin,
-    S: Source<Result = M> + Send + Sync + 'static,
-    M: Into<intercept::types::EventCtx>
-        + Into<SourceResult>
-        + MutableEvent
-        + std::fmt::Debug
-        + Clone
-        + Send
-        + 'static,
+    S: Source + Send + Sync + 'static,
     I: Intercept + Clone + Send + Sync + 'static,
 {
-    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message<SourceResult>>();
+    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
     let actor = IngestActor::new(
@@ -214,12 +198,6 @@ where
             msg = msg_rx.recv() => {
                 match msg {
                     Some(msg) => {
-                        if let Message::Result(msg) = &msg {
-                            tracing::info!("Sending message to client: {:?}", msg.payload.as_ref().map(|p| std::str::from_utf8(&base64::engine::general_purpose::STANDARD
-                                .decode(p)
-                                .unwrap()).unwrap().to_owned()));
-                        }
-
                         let txt = serde_json::to_string(&msg).expect("failed to serialize message");
 
                         // TODO: Batch here and flush on an interval?

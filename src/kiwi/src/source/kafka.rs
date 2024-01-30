@@ -19,15 +19,30 @@ use tokio::sync::{
     oneshot,
 };
 
-use crate::event::MutableEvent;
 use crate::hook;
 
-use super::{Source, SourceId, SourceMessage};
+use super::{Source, SourceId, SourceMessage, SourceResult};
+
+#[derive(Debug, Clone)]
+pub struct KafkaSourceResult {
+    /// Event key
+    pub key: Option<Vec<u8>>,
+    /// Event payload
+    pub payload: Option<Vec<u8>>,
+    /// Source ID this event was produced from
+    pub topic: String,
+    /// Timestamp at which the message was produced
+    pub timestamp: Option<i64>,
+    /// Partition ID this event was produced from
+    pub partition: i32,
+    /// Offset at which the message was produced
+    pub offset: i64,
+}
 
 pub struct PartitionConsumer {
     consumer: StreamConsumer,
     shutdown_rx: Fuse<oneshot::Receiver<()>>,
-    tx: Sender<SourceMessage<OwnedMessage>>,
+    tx: Sender<SourceMessage>,
 }
 
 impl PartitionConsumer {
@@ -37,7 +52,7 @@ impl PartitionConsumer {
         offset: rdkafka::Offset,
         client_config: &'a ClientConfig,
         shutdown_rx: Fuse<oneshot::Receiver<()>>,
-        tx: Sender<SourceMessage<OwnedMessage>>,
+        tx: Sender<SourceMessage>,
     ) -> anyhow::Result<Self> {
         let consumer: StreamConsumer = client_config.create().context(format!(
             "Failed to create stream consumer for topic/partition {}/{}",
@@ -81,10 +96,11 @@ impl PartitionConsumer {
                                     );
                                 }
                                 Ok(borrowed_message) => {
+                                    let owned_message = borrowed_message.detach();
                                     // An error here does not mean future calls will fail, since new subscribers
                                     // may be created. If there are no subscribers, we simply discard the message
                                     // and move on
-                                    let _ = self.tx.send(SourceMessage::Result(borrowed_message.detach()));
+                                    let _ = self.tx.send(SourceMessage::Result(owned_message.into()));
                                 }
                             };
                         },
@@ -102,13 +118,11 @@ pub struct KafkaTopicSource {
     topic: String,
     // Map of partition ID -> shutdown trigger
     _partition_consumers: Arc<Mutex<BTreeMap<i32, ShutdownTrigger>>>,
-    tx: Sender<SourceMessage<OwnedMessage>>,
+    tx: Sender<SourceMessage>,
 }
 
 impl Source for KafkaTopicSource {
-    type Result = OwnedMessage;
-
-    fn subscribe(&self) -> Receiver<SourceMessage<Self::Result>> {
+    fn subscribe(&self) -> Receiver<SourceMessage> {
         self.tx.subscribe()
     }
 
@@ -124,7 +138,7 @@ async fn reconcile_partition_consumers<T: Into<Timeout> + Clone + Send + Sync + 
     topic: &str,
     client: Arc<Mutex<Client>>,
     client_config: &ClientConfig,
-    tx: Sender<SourceMessage<OwnedMessage>>,
+    tx: Sender<SourceMessage>,
     metadata_fetch_timeout: T,
     watermarks_fetch_timeout: T,
     consumer_tasks: &Mutex<BTreeMap<i32, ShutdownTrigger>>,
@@ -218,7 +232,7 @@ async fn reconcile_partition_consumers<T: Into<Timeout> + Clone + Send + Sync + 
 impl KafkaTopicSource {
     pub async fn new(topic: String, client_config: &ClientConfig) -> anyhow::Result<Self> {
         // TODO: make this capacity configurable
-        let (tx, _) = tokio::sync::broadcast::channel::<SourceMessage<OwnedMessage>>(100);
+        let (tx, _) = tokio::sync::broadcast::channel::<SourceMessage>(100);
         let consumer_tasks = Arc::new(Mutex::new(BTreeMap::new()));
         // Transient consumer used to fetch metadata and watermarks
 
@@ -295,30 +309,6 @@ impl KafkaTopicSource {
     }
 }
 
-impl From<OwnedMessage> for hook::intercept::types::EventCtx {
-    fn from(value: OwnedMessage) -> Self {
-        Self::Kafka(value.into())
-    }
-}
-
-impl From<OwnedMessage> for hook::intercept::types::KafkaEventCtx {
-    fn from(value: OwnedMessage) -> Self {
-        Self {
-            payload: value.payload().map(|p| p.to_owned()),
-            topic: value.topic().to_string(),
-            timestamp: value.timestamp().to_millis(),
-            partition: value.partition(),
-            offset: value.offset(),
-        }
-    }
-}
-
-impl MutableEvent for OwnedMessage {
-    fn set_payload(self, payload: Option<Vec<u8>>) -> Self {
-        OwnedMessage::set_payload(self, payload)
-    }
-}
-
 pub async fn build_sources(
     topics: impl Iterator<Item = String>,
     group_prefix: String,
@@ -351,4 +341,43 @@ pub async fn build_sources(
     }
 
     result
+}
+
+impl From<OwnedMessage> for SourceResult {
+    fn from(value: OwnedMessage) -> Self {
+        Self::Kafka(value.into())
+    }
+}
+
+impl From<OwnedMessage> for KafkaSourceResult {
+    fn from(value: OwnedMessage) -> Self {
+        Self {
+            key: value.key().map(|k| k.to_owned()),
+            payload: value.payload().map(|p| p.to_owned()),
+            topic: value.topic().to_string(),
+            timestamp: value.timestamp().to_millis(),
+            partition: value.partition(),
+            offset: value.offset(),
+        }
+    }
+}
+
+impl From<SourceResult> for hook::intercept::types::EventCtx {
+    fn from(value: SourceResult) -> Self {
+        match value {
+            SourceResult::Kafka(kafka_result) => Self::Kafka(kafka_result.into()),
+        }
+    }
+}
+
+impl From<KafkaSourceResult> for hook::intercept::types::KafkaEventCtx {
+    fn from(value: KafkaSourceResult) -> Self {
+        Self {
+            payload: value.payload,
+            topic: value.topic,
+            timestamp: value.timestamp,
+            partition: value.partition,
+            offset: value.offset,
+        }
+    }
 }
