@@ -98,7 +98,7 @@ server:
 
     let resp = read.next().await.expect("Expected response")?;
 
-    let resp: Message<()> = serde_json::from_str(&resp.to_text().unwrap())?;
+    let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
 
     match resp {
         Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) => {
@@ -130,7 +130,7 @@ server:
         let mut count = 0;
         while count < 1000 {
             let msg = read.next().await.unwrap().unwrap();
-            let msg: Message<SourceResult> = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
+            let msg: Message = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
 
             match msg {
                 Message::Result(msg) => {
@@ -198,7 +198,7 @@ server:
 
     let resp = read.next().await.expect("Expected response")?;
 
-    let resp: Message<()> = serde_json::from_str(&resp.to_text().unwrap())?;
+    let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
 
     match resp {
         Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) => {
@@ -221,7 +221,7 @@ server:
 
     let resp = read.next().await.expect("Expected response")?;
 
-    let resp: Message<()> = serde_json::from_str(&resp.to_text().unwrap())?;
+    let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
 
     match resp {
         Message::Notice(Notice::SubscriptionClosed { source, message: _ }) => {

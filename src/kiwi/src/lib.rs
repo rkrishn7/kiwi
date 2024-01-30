@@ -1,5 +1,4 @@
 pub mod config;
-pub mod event;
 pub mod hook;
 pub mod ingest;
 pub mod protocol;
