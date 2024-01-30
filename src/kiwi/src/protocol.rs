@@ -1,4 +1,3 @@
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -57,10 +56,12 @@ pub enum Message {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceResult {
+    #[serde(with = "crate::util::serde::base64")]
     /// Event key
     pub key: Option<Vec<u8>>,
+    #[serde(with = "crate::util::serde::base64")]
     /// base64 encoded event payload
-    pub payload: Option<String>,
+    pub payload: Option<Vec<u8>>,
     /// Source ID this event was produced from
     pub source_id: SourceId,
     /// Type of source this event was produced from
@@ -73,10 +74,6 @@ impl From<source::SourceResult> for SourceResult {
     fn from(value: source::SourceResult) -> Self {
         match value {
             source::SourceResult::Kafka(kafka) => {
-                let payload: Option<String> = kafka
-                    .payload
-                    .map(|p| base64::engine::general_purpose::STANDARD.encode(p));
-
                 let metadata = serde_json::json!({
                     "partition": kafka.partition,
                     "offset": kafka.offset,
@@ -85,7 +82,7 @@ impl From<source::SourceResult> for SourceResult {
 
                 Self {
                     key: kafka.key,
-                    payload,
+                    payload: kafka.payload,
                     source_id: kafka.topic,
                     source_type: "kafka".into(),
                     metadata: Some(metadata.to_string()),
@@ -106,6 +103,7 @@ pub enum ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
 
     #[test]
     fn test_command_de() {
@@ -203,9 +201,10 @@ mod tests {
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("test".as_bytes());
         assert_eq!(
             serialized,
-            r#"{"type":"RESULT","data":{"key":null,"payload":"test","source_id":"test","source_type":"kafka","metadata":null}}"#
+            r#"{"type":"RESULT","data":{"key":null,"payload":"$encoded","source_id":"test","source_type":"kafka","metadata":null}}"#.replace("$encoded", encoded.as_str())
         );
     }
 }

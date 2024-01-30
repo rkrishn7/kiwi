@@ -218,7 +218,6 @@ mod tests {
     use crate::source::SourceMessage;
 
     use super::*;
-    use base64::Engine;
     use std::time::Duration;
     use tokio::sync::broadcast::{Receiver, Sender};
 
@@ -533,7 +532,7 @@ mod tests {
                     Message::Result(m) => {
                         assert_eq!(
                             m.payload,
-                            Some(base64::engine::general_purpose::STANDARD.encode("hello".as_bytes().to_owned())),
+                            Some("hello".as_bytes().to_owned()),
                             "message payload should have been transformed"
                         );
                     }

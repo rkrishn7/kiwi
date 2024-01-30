@@ -1,4 +1,3 @@
-use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use rdkafka::{
     admin::{AdminClient, AdminOptions, NewPartitions},
@@ -8,10 +7,7 @@ use rdkafka::{
 use std::{io::Write, process, time::Duration};
 use tokio_tungstenite::{connect_async, tungstenite};
 
-use kiwi::{
-    protocol::{Command, CommandResponse, Message, Notice},
-    source::SourceResult,
-};
+use kiwi::protocol::{Command, CommandResponse, Message, Notice};
 
 use tempfile::NamedTempFile;
 
@@ -135,11 +131,8 @@ server:
             match msg {
                 Message::Result(msg) => {
                     assert_eq!(msg.source_id.as_ref(), "topic1".to_string());
-                    let msg = base64::engine::general_purpose::STANDARD
-                        .decode(msg.payload.as_ref().unwrap())
-                        .unwrap();
                     assert_eq!(
-                        std::str::from_utf8(&msg).unwrap(),
+                        std::str::from_utf8(&msg.payload.unwrap()).unwrap(),
                         format!("Message {}", count)
                     );
                     count += 1;
