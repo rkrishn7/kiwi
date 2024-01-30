@@ -228,23 +228,6 @@ mod tests {
         source_id: SourceId,
     }
 
-    #[derive(Debug, Clone)]
-    struct TestMessage {
-        payload: Option<Vec<u8>>,
-    }
-
-    impl From<TestMessage> for intercept::types::EventCtx {
-        fn from(value: TestMessage) -> Self {
-            Self::Kafka(intercept::types::KafkaEventCtx {
-                payload: value.payload,
-                topic: "test".to_string(),
-                timestamp: None,
-                partition: 0,
-                offset: 0,
-            })
-        }
-    }
-
     impl Source for TestSource {
         fn subscribe(&self) -> Receiver<SourceMessage> {
             self.tx.subscribe()
