@@ -44,7 +44,7 @@ where
         tokio::spawn(async move {
             match perform_handshake(stream, authenticate_hook).await {
                 Ok((mut ws_stream, auth_ctx)) => {
-                    tracing::info!("New WebSocket connection: {}", addr);
+                    tracing::info!(ip = ?addr, "New WebSocket connection");
 
                     let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx { addr });
 
