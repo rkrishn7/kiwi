@@ -5,8 +5,7 @@ use std::sync::Mutex;
 
 use clap::Parser;
 
-use kiwi::config::Config;
-use kiwi::config::Kafka as KafkaConfig;
+use kiwi::config::{Config, SourceType};
 use kiwi::hook::authenticate::wasm::WasmAuthenticateHook;
 use kiwi::hook::intercept::wasm::WasmInterceptHook;
 use kiwi::source::kafka::{build_source as build_kafka_source, start_partition_discovery};
@@ -39,30 +38,42 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::parse(&args.config)?;
 
-    let KafkaConfig {
-        topics,
-        group_prefix,
-        bootstrap_servers,
-    } = &config.sources.kafka;
-
     let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
 
-    // Build Kafka sources
-    for topic in topics {
-        let source = build_kafka_source(topic.name.clone(), bootstrap_servers, group_prefix)?;
-        sources
-            .lock()
-            .expect("poisoned lock")
-            .insert(topic.name.clone(), source);
+    for source in config.sources.iter() {
+        match source {
+            SourceType::Kafka { topic } => {
+                if let Some(kafka_config) = config.kafka.as_ref() {
+                    let source = build_kafka_source(
+                        topic.clone(),
+                        &kafka_config.bootstrap_servers,
+                        &kafka_config.group_id_prefix,
+                    )?;
+                    sources
+                        .lock()
+                        .expect("poisoned lock")
+                        .insert(topic.clone(), source);
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Kafka source specified but no Kafka configuration found"
+                    ));
+                }
+            }
+        }
     }
 
-    // Start partition discovery (TODO: make configurable)
-    start_partition_discovery(
-        bootstrap_servers,
-        Arc::clone(&sources),
-        std::time::Duration::from_millis(3000),
-    )?;
+    if let Some(kafka_config) = config.kafka.as_ref() {
+        if kafka_config.partition_discovery_enabled {
+            start_partition_discovery(
+                &kafka_config.bootstrap_servers,
+                Arc::clone(&sources),
+                std::time::Duration::from_millis(
+                    kafka_config.partition_discovery_interval_ms.into(),
+                ),
+            )?;
+        }
+    }
 
     let intercept_hook = config
         .hooks

@@ -5,27 +5,41 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub sources: Sources,
+    pub sources: Vec<SourceType>,
     pub hooks: Option<Hooks>,
     pub server: Server,
+    pub kafka: Option<Kafka>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Sources {
-    pub kafka: Kafka,
+#[serde(tag = "type")]
+#[serde(rename_all = "lowercase")]
+pub enum SourceType {
+    Kafka { topic: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Kafka {
     #[serde(default = "Kafka::default_group_prefix")]
-    pub group_prefix: String,
+    pub group_id_prefix: String,
     pub bootstrap_servers: Vec<String>,
-    pub topics: Vec<Topic>,
+    #[serde(default = "Kafka::default_partition_discovery_enabled")]
+    pub partition_discovery_enabled: bool,
+    #[serde(default = "Kafka::default_partition_discovery_interval_ms")]
+    pub partition_discovery_interval_ms: u32,
 }
 
 impl Kafka {
     fn default_group_prefix() -> String {
         "kiwi-".into()
+    }
+
+    fn default_partition_discovery_enabled() -> bool {
+        true
+    }
+
+    fn default_partition_discovery_interval_ms() -> u32 {
+        300000
     }
 }
 
@@ -33,12 +47,6 @@ impl Kafka {
 pub struct Hooks {
     pub intercept: Option<String>,
     pub authenticate: Option<String>,
-}
-
-/// Topic configuration
-#[derive(Debug, Clone, Deserialize, Hash, PartialEq, Eq)]
-pub struct Topic {
-    pub name: String,
 }
 
 /// Server configuration
@@ -74,11 +82,8 @@ mod tests {
             intercept: ./intercept.wasm
             authenticate: ./auth.wasm
         sources:
-            kafka:
-                bootstrap_servers:
-                    - localhost:9092
-                topics:
-                    - name: test
+            - type: kafka
+              topic: test
         server:
             address: '127.0.0.1:8000'
         ";
@@ -98,11 +103,8 @@ mod tests {
         // Ensure we can parse a config that does not include any plugins
         let config = "
         sources:
-            kafka:
-                bootstrap_servers:
-                    - localhost:9092
-                topics:
-                    - name: test
+            - type: kafka
+              topic: test
         server:
             address: '127.0.0.1:8000'
         ";
@@ -110,5 +112,63 @@ mod tests {
         let config = Config::from_str(config).unwrap();
 
         assert!(config.hooks.is_none());
+    }
+
+    #[test]
+    fn test_sources_required() {
+        let config = "
+        server:
+            address: '127.0.0.1:8000'
+        ";
+
+        assert!(Config::from_str(config).is_err());
+    }
+
+    #[test]
+    fn test_kafka_sources() {
+        // Ensure we can parse a config that includes kafka sources
+        let config = "
+        sources:
+            - type: kafka
+              topic: test
+        server:
+            address: '127.0.0.1:8000'
+        ";
+
+        let config = Config::from_str(config).unwrap();
+
+        assert!(config.sources.len() == 1);
+        assert!(
+            matches!(config.sources[0].clone(), SourceType::Kafka { topic } if topic == "test")
+        );
+    }
+
+    #[test]
+    fn test_kafka_config() {
+        // Test default values
+        let config = "
+        sources: []
+        server:
+            address: '127.0.0.1:8000'
+        kafka:
+            bootstrap_servers:
+                - 'localhost:9092'
+        ";
+
+        let config = Config::from_str(config).unwrap();
+
+        assert!(config.kafka.is_some());
+        assert!(config.kafka.as_ref().unwrap().partition_discovery_enabled);
+        assert_eq!(
+            config
+                .kafka
+                .as_ref()
+                .unwrap()
+                .partition_discovery_interval_ms,
+            300000
+        );
+        assert!(config.kafka.as_ref().unwrap().group_id_prefix == "kiwi-");
+        assert!(config.kafka.as_ref().unwrap().bootstrap_servers.len() == 1);
+        assert!(config.kafka.as_ref().unwrap().bootstrap_servers[0] == "localhost:9092");
     }
 }
