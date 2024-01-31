@@ -232,6 +232,13 @@ impl KafkaTopicSource {
                                             tx.clone(),
                                         ) {
                                             Ok(partition_consumer) => {
+                                                let _ = tx.send(SourceMessage::MetadataChanged(
+                                                    format!(
+                                                        "New partition ({}) observed for topic {}",
+                                                        topic, partition
+                                                    ),
+                                                ));
+
                                                 tokio::task::spawn(partition_consumer.run());
                                                 entry.insert(shutdown_trigger);
 
