@@ -155,7 +155,7 @@ async fn test_closes_subscription_on_changed_metadata() -> anyhow::Result<()> {
         r#"
 sources:
     - type: kafka
-        topic: topic1
+      topic: topic1
 
 kafka:
     partition_discovery_enabled: true
