@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use clap::Parser;
 
@@ -7,7 +9,9 @@ use kiwi::config::Config;
 use kiwi::config::Kafka as KafkaConfig;
 use kiwi::hook::authenticate::wasm::WasmAuthenticateHook;
 use kiwi::hook::intercept::wasm::WasmInterceptHook;
-use kiwi::source::kafka::build_sources as build_kafka_sources;
+use kiwi::source::kafka::{build_source as build_kafka_source, start_partition_discovery};
+use kiwi::source::Source;
+use kiwi::source::SourceId;
 
 /// kiwi is a bridge between your backend services and front-end applications.
 /// It seamlessly and efficiently manages the flow of real-time Kafka events
@@ -41,15 +45,24 @@ async fn main() -> anyhow::Result<()> {
         bootstrap_servers,
     } = &config.sources.kafka;
 
+    let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
+        Arc::new(Mutex::new(BTreeMap::new()));
+
     // Build Kafka sources
-    // TODO: Once we introduce more sources, figure out how to make this
-    // play nice with dynamic dispatch
-    let kafka_sources = build_kafka_sources(
-        topics.iter().map(|topic| topic.name.clone()),
-        group_prefix.clone(),
-        bootstrap_servers.clone(),
-    )
-    .await;
+    for topic in topics {
+        let source = build_kafka_source(topic.name.clone(), bootstrap_servers)?;
+        sources
+            .lock()
+            .expect("poisoned lock")
+            .insert(topic.name.clone(), source);
+    }
+
+    // Start partition discovery (TODO: make configurable)
+    start_partition_discovery(
+        bootstrap_servers,
+        Arc::clone(&sources),
+        std::time::Duration::from_millis(3000),
+    )?;
 
     let intercept_hook = config
         .hooks
@@ -68,13 +81,7 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
-    kiwi::ws::serve(
-        &listen_addr,
-        Arc::new(kafka_sources),
-        intercept_hook,
-        authenticate_hook,
-    )
-    .await?;
+    kiwi::ws::serve(&listen_addr, sources, intercept_hook, authenticate_hook).await?;
 
     Ok(())
 }

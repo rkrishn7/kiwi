@@ -7,7 +7,6 @@ use futures::stream::StreamExt;
 use futures::{future::Fuse, FutureExt};
 use maplit::btreemap;
 use rdkafka::client::{Client, DefaultClientContext};
-use rdkafka::util::Timeout;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     message::OwnedMessage,
@@ -21,7 +20,7 @@ use tokio::sync::{
 
 use crate::hook;
 
-use super::{Source, SourceId, SourceMessage, SourceResult};
+use super::{Source, SourceId, SourceMessage, SourceMetadata, SourceResult};
 
 #[derive(Debug, Clone)]
 pub struct KafkaSourceResult {
@@ -37,6 +36,11 @@ pub struct KafkaSourceResult {
     pub partition: i32,
     /// Offset at which the message was produced
     pub offset: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct KafkaSourceMetadata {
+    partitions: Vec<PartitionMetadata>,
 }
 
 pub struct PartitionConsumer {
@@ -119,6 +123,7 @@ pub struct KafkaTopicSource {
     // Map of partition ID -> shutdown trigger
     _partition_consumers: Arc<Mutex<BTreeMap<i32, ShutdownTrigger>>>,
     tx: Sender<SourceMessage>,
+    metadata_tx: Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>>,
 }
 
 impl Source for KafkaTopicSource {
@@ -129,139 +134,59 @@ impl Source for KafkaTopicSource {
     fn source_id(&self) -> &SourceId {
         &self.topic
     }
-}
 
-#[allow(clippy::too_many_arguments)]
-/// Creates new consumers for partitions that have not yet been observed.
-/// Each consumer will start consuming from the partition's high watermark.
-async fn reconcile_partition_consumers<T: Into<Timeout> + Clone + Send + Sync + 'static>(
-    topic: &str,
-    client: Arc<Mutex<Client>>,
-    client_config: &ClientConfig,
-    tx: Sender<SourceMessage>,
-    metadata_fetch_timeout: T,
-    watermarks_fetch_timeout: T,
-    consumer_tasks: &Mutex<BTreeMap<i32, ShutdownTrigger>>,
-    emit_metadata_changed: bool,
-) -> anyhow::Result<()> {
-    let metadata_client = Arc::clone(&client);
-    let timeout = metadata_fetch_timeout.clone();
-    let t = topic.to_string();
-
-    let metadata = tokio::task::spawn_blocking(move || {
-        let metadata_client = metadata_client.lock().expect("poisoned lock");
-
-        metadata_client
-            .fetch_metadata(Some(&t), timeout)
-            .expect("Failed to fetch topic metadata")
-    })
-    .await?;
-
-    assert_eq!(metadata.topics().len(), 1);
-
-    let partitions = {
-        let topic_metadata = metadata.topics().first().unwrap();
-        topic_metadata
-            .partitions()
-            .iter()
-            .map(|p| p.id())
-            .collect::<Vec<_>>()
-    };
-
-    for partition in partitions {
-        let watermarks_client = Arc::clone(&client);
-        let t = topic.to_string();
-        let watermarks_fetch_timeout = watermarks_fetch_timeout.clone();
-        let (_, high) = tokio::task::spawn_blocking(move || {
-            let watermarks_client = watermarks_client.lock().expect("poisoned lock");
-
-            watermarks_client
-                .fetch_watermarks(&t, partition, watermarks_fetch_timeout)
-                .expect("Failed to fetch watermarks")
-        })
-        .await?;
-
-        let mut consumer_tasks = consumer_tasks.lock().expect("poisoned lock");
-
-        match consumer_tasks.entry(partition) {
-            std::collections::btree_map::Entry::Occupied(_) => {
-                // We already have a consumer task for this partition
-                continue;
-            }
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                // We haven't seen this partition before, so we need to create
-                // a new consumer task for it
-                if emit_metadata_changed {
-                    let _ = tx.send(SourceMessage::MetadataChanged(format!(
-                        "New partition ({}) observed for topic {}",
-                        topic, partition
-                    )));
-                }
-
-                let (shutdown_trigger, shutdown_rx) = oneshot::channel::<()>();
-
-                let partition_consumer = PartitionConsumer::new(
-                    topic,
-                    partition,
-                    rdkafka::Offset::Offset(high),
-                    client_config,
-                    shutdown_rx.fuse(),
-                    tx.clone(),
-                )
-                .context(format!(
-                    "Failed to create partition consumer for topic/partition {}/{}",
-                    topic, partition
-                ))?;
-
-                tokio::task::spawn(partition_consumer.run());
-
-                tracing::debug!(
-                    topic = topic,
-                    partition = partition,
-                    "Created new partition consumer",
-                );
-
-                entry.insert(shutdown_trigger);
-            }
-        }
+    fn metadata_tx(&self) -> &Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>> {
+        &self.metadata_tx
     }
-
-    Ok(())
 }
 
 impl KafkaTopicSource {
-    pub async fn new(topic: String, client_config: &ClientConfig) -> anyhow::Result<Self> {
+    pub fn new(topic: String, bootstrap_servers: &Vec<String>) -> anyhow::Result<Self> {
         // TODO: make this capacity configurable
         let (tx, _) = tokio::sync::broadcast::channel::<SourceMessage>(100);
+        let (metadata_tx, mut metadata_rx) =
+            tokio::sync::mpsc::unbounded_channel::<SourceMetadata>();
         let consumer_tasks = Arc::new(Mutex::new(BTreeMap::new()));
-        // Transient consumer used to fetch metadata and watermarks
 
-        let native_config = client_config.create_native_config()?;
+        // Transient client used to fetch metadata and watermarks
+        let metadata_client = create_metadata_client(bootstrap_servers)?;
 
-        // Kafka only provides producer and consumer clients. We use a producer
-        // for querying metadata and watermarks as they are allegedly more lightweight
-        let client = Arc::new(Mutex::new(rdkafka::client::Client::new(
-            client_config,
-            native_config,
-            rdkafka::types::RDKafkaType::RD_KAFKA_PRODUCER,
-            DefaultClientContext,
-        )?));
+        let mut client_config = ClientConfig::new();
 
-        reconcile_partition_consumers(
-            topic.as_str(),
-            Arc::clone(&client),
-            client_config,
-            tx.clone(),
-            Duration::from_millis(5000),
-            Duration::from_millis(5000),
-            &consumer_tasks,
-            false,
-        )
-        .await
-        .context("Failed to initialize partition consumers")?;
+        client_config.extend(btreemap! {
+            "group.id".to_string() => format!("kiwi-{}", nanoid::nanoid!()),
+            // We don't care about offset committing, since we are just relaying the latest messages.
+            "enable.auto.commit".to_string() => "false".to_string(),
+            "enable.partition.eof".to_string() => "false".to_string(),
+            // A friendly label to present to Kafka
+            "client.id".to_string() => "kiwi".to_string(),
+            "bootstrap.servers".to_string() => bootstrap_servers.join(","),
+            "topic.metadata.refresh.interval.ms".to_string() => (-1).to_string(),
+        });
 
-        // TODO: Create a metadata refresh task that notifies
-        // along tx when the topic metadata changes
+        for partition_metadata in fetch_partition_metadata(topic.as_str(), &metadata_client)? {
+            let (shutdown_trigger, shutdown_rx) = oneshot::channel::<()>();
+
+            let partition_consumer = PartitionConsumer::new(
+                topic.as_str(),
+                partition_metadata.partition,
+                rdkafka::Offset::Offset(partition_metadata.hi_watermark),
+                &client_config,
+                shutdown_rx.fuse(),
+                tx.clone(),
+            )
+            .context(format!(
+                "Failed to create partition consumer for topic/partition {}/{}",
+                topic, partition_metadata.partition
+            ))?;
+
+            tokio::task::spawn(partition_consumer.run());
+
+            consumer_tasks
+                .lock()
+                .expect("poisoned lock")
+                .insert(partition_metadata.partition, shutdown_trigger);
+        }
 
         let weak_tasks = Arc::downgrade(&consumer_tasks);
 
@@ -269,39 +194,74 @@ impl KafkaTopicSource {
             topic: topic.clone(),
             _partition_consumers: consumer_tasks,
             tx: tx.clone(),
+            metadata_tx: Some(metadata_tx),
         };
 
         let client_config = client_config.clone();
 
         tokio::task::spawn(async move {
-            loop {
+            while let Some(metadata) = metadata_rx.recv().await {
                 if let Some(tasks) = weak_tasks.upgrade() {
-                    if let Err(err) = reconcile_partition_consumers(
-                        topic.as_str(),
-                        Arc::clone(&client),
-                        &client_config,
-                        tx.clone(),
-                        Duration::from_millis(5000),
-                        Duration::from_millis(5000),
-                        &tasks,
-                        true,
-                    )
-                    .await
-                    {
-                        tracing::error!(
-                            "Failed to reconcile partition consumers for topic {}: {}",
-                            topic,
-                            err
-                        );
+                    match metadata {
+                        SourceMetadata::Kafka(topic_metadata) => {
+                            for PartitionMetadata {
+                                partition,
+                                hi_watermark,
+                                ..
+                            } in topic_metadata.partitions
+                            {
+                                let mut tasks = tasks.lock().expect("poisoned lock");
+
+                                match tasks.entry(partition) {
+                                    std::collections::btree_map::Entry::Vacant(entry) => {
+                                        let (shutdown_trigger, shutdown_rx) =
+                                            oneshot::channel::<()>();
+
+                                        match PartitionConsumer::new(
+                                            topic.as_str(),
+                                            partition,
+                                            rdkafka::Offset::Offset(hi_watermark),
+                                            &client_config,
+                                            shutdown_rx.fuse(),
+                                            tx.clone(),
+                                        ) {
+                                            Ok(partition_consumer) => {
+                                                tokio::task::spawn(partition_consumer.run());
+                                                entry.insert(shutdown_trigger);
+
+                                                tracing::debug!(
+                                                    topic = topic.as_str(),
+                                                    partition = partition,
+                                                    "Observed new partition. Created new partition consumer"
+                                                );
+                                            }
+                                            Err(err) => {
+                                                tracing::error!(
+                                                    topic = topic,
+                                                    partition = partition,
+                                                    error = ?err,
+                                                    "Failed to create partition consumer",
+                                                );
+                                            }
+                                        }
+                                    }
+                                    std::collections::btree_map::Entry::Occupied(_) => (),
+                                }
+                            }
+                        }
+                        _ => {
+                            tracing::warn!("Received unexpected metadata type");
+                        }
                     }
                 } else {
+                    tracing::debug!(
+                        topic = topic.as_str(),
+                        "Topic source has been dropped. Exiting partition creation task"
+                    );
                     // The absence of the consumer map indicates that the source
-                    // has been dropped, so we can safely exit the thread
+                    // has been dropped, so we can safely exit the task
                     break;
                 }
-
-                // TODO: Make this similar to the configured metadata refresh interval
-                tokio::time::sleep(Duration::from_millis(2000)).await;
             }
         });
 
@@ -309,38 +269,110 @@ impl KafkaTopicSource {
     }
 }
 
-pub async fn build_sources(
-    topics: impl Iterator<Item = String>,
-    group_prefix: String,
-    bootstrap_servers: Vec<String>,
-) -> BTreeMap<SourceId, KafkaTopicSource> {
+#[derive(Debug, Clone)]
+pub struct PartitionMetadata {
+    pub partition: i32,
+    pub hi_watermark: i64,
+    pub lo_watermark: i64,
+}
+
+fn create_metadata_client(bootstrap_servers: &Vec<String>) -> anyhow::Result<Client> {
     let mut client_config = ClientConfig::new();
-    let group_id = format!("{}{}", group_prefix, nanoid::nanoid!());
-    let bootstrap_servers = bootstrap_servers.join(",");
 
     client_config.extend(btreemap! {
-        "group.id".to_string() => group_id.to_string(),
-        // We don't care about offset committing, since we are just relaying the latest messages.
-        "enable.auto.commit".to_string() => "false".to_string(),
-        "enable.partition.eof".to_string() => "false".to_string(),
-        // A friendly label to present to Kafka
-        "client.id".to_string() => "kiwi".to_string(),
-        "bootstrap.servers".to_string() => bootstrap_servers,
-        // TODO: make this configurable
-        // "topic.metadata.refresh.interval.ms".to_string() => 2000.to_string(),
+        "client.id".to_string() => "kiwi-metadata".to_string(),
+        "bootstrap.servers".to_string() => bootstrap_servers.join(","),
     });
 
-    let mut result = BTreeMap::new();
+    let native_config = client_config.create_native_config()?;
 
-    for topic in topics {
-        let src = KafkaTopicSource::new(topic, &client_config)
-            .await
-            .expect("Failed to create Kafka topic source");
+    // Kafka only provides producer and consumer clients. We use a producer
+    // for querying metadata and watermarks as they are allegedly more lightweight
+    let client = rdkafka::client::Client::new(
+        &client_config,
+        native_config,
+        rdkafka::types::RDKafkaType::RD_KAFKA_PRODUCER,
+        DefaultClientContext,
+    )?;
 
-        result.insert(src.source_id().clone(), src);
+    Ok(client)
+}
+
+fn fetch_partition_metadata(
+    topic: &str,
+    client: &Client,
+) -> anyhow::Result<Vec<PartitionMetadata>> {
+    let mut result = Vec::new();
+
+    let metadata = client.fetch_metadata(Some(topic), Duration::from_millis(5000))?;
+    let topic = &metadata.topics()[0];
+
+    for partition in topic.partitions() {
+        let (low, hi) =
+            client.fetch_watermarks(topic.name(), partition.id(), Duration::from_millis(5000))?;
+        result.push(PartitionMetadata {
+            partition: partition.id(),
+            hi_watermark: hi,
+            lo_watermark: low,
+        });
     }
 
-    result
+    Ok(result)
+}
+
+pub fn start_partition_discovery(
+    bootstrap_servers: &Vec<String>,
+    topic_sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
+    poll_interval: Duration,
+) -> anyhow::Result<()> {
+    let client = create_metadata_client(bootstrap_servers)?;
+
+    std::thread::spawn(move || loop {
+        // Temporary MutexGuard dropped at the end of this statement
+        let topics = topic_sources
+            .lock()
+            .expect("poisoned lock")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for topic in topics.iter() {
+            match fetch_partition_metadata(topic.as_str(), &client) {
+                Ok(metadata) => {
+                    if let Some(source) = topic_sources
+                        .lock()
+                        .expect("poisoned lock")
+                        .get(topic.as_str())
+                    {
+                        for partition_metadata in metadata {
+                            let metadata_tx = source.metadata_tx();
+
+                            if let Some(metadata_tx) = metadata_tx {
+                                let _ =
+                                    metadata_tx.send(SourceMetadata::Kafka(KafkaSourceMetadata {
+                                        partitions: vec![partition_metadata],
+                                    }));
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::error!(topic = topic.as_str(), error = ?err, "Failed to fetch partition metadata for topic");
+                }
+            }
+        }
+
+        std::thread::sleep(poll_interval);
+    });
+
+    Ok(())
+}
+
+pub fn build_source(
+    topic: String,
+    bootstrap_servers: &Vec<String>,
+) -> anyhow::Result<Box<dyn Source + Send + Sync + 'static>> {
+    Ok(Box::new(KafkaTopicSource::new(topic, bootstrap_servers)?))
 }
 
 impl From<OwnedMessage> for SourceResult {

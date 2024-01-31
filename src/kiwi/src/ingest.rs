@@ -1,6 +1,6 @@
 use std::collections::{btree_map, BTreeMap};
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures::stream::select_all::select_all;
 use futures::StreamExt;
@@ -16,10 +16,10 @@ use crate::source::{Source, SourceId, SourceMessage, SourceResult};
 /// - Processing commands as they become available
 /// - Reading events from subscribed sources, processing them, and
 ///   forwarding them along its active subscriptions
-pub struct IngestActor<S, I> {
+pub struct IngestActor<I> {
     cmd_rx: UnboundedReceiver<Command>,
     msg_tx: UnboundedSender<Message>,
-    sources: Arc<BTreeMap<SourceId, S>>,
+    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     /// Subscriptions this actor currently maintains for its handle
     subscriptions: BTreeMap<SourceId, BroadcastStream<SourceMessage>>,
     connection_ctx: intercept::types::ConnectionCtx,
@@ -40,13 +40,12 @@ enum IngestActorState<T> {
     Lagged((SourceId, u64)),
 }
 
-impl<S, I> IngestActor<S, I>
+impl<I> IngestActor<I>
 where
-    S: Source,
     I: Intercept + Clone + Send + 'static,
 {
     pub fn new(
-        sources: Arc<BTreeMap<String, S>>,
+        sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
         cmd_rx: UnboundedReceiver<Command>,
         msg_tx: UnboundedSender<Message>,
         connection_ctx: intercept::types::ConnectionCtx,
@@ -147,7 +146,9 @@ where
                     error: "Source already has an active subscription".to_string(),
                 },
                 btree_map::Entry::Vacant(entry) => {
-                    let response = if let Some(source) = self.sources.get(&source_id) {
+                    let response = if let Some(source) =
+                        self.sources.lock().expect("poisoned lock").get(&source_id)
+                    {
                         entry.insert(BroadcastStream::new(source.subscribe()));
                         CommandResponse::SubscribeOk { source_id }
                     } else {
@@ -215,7 +216,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::source::SourceMessage;
+    use crate::source::{SourceMessage, SourceMetadata};
 
     use super::*;
     use std::time::Duration;
@@ -234,6 +235,10 @@ mod tests {
 
         fn source_id(&self) -> &SourceId {
             &self.source_id
+        }
+
+        fn metadata_tx(&self) -> &Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>> {
+            &None
         }
     }
 
@@ -297,15 +302,15 @@ mod tests {
         sources.extend(test_source_ids.into_iter().map(|source_id| {
             (
                 source_id.clone(),
-                TestSource {
+                Box::new(TestSource {
                     tx: source_tx.clone(),
                     source_id,
-                },
+                }) as Box<dyn Source + Send + Sync + 'static>,
             )
         }));
 
         let actor = IngestActor::new(
-            Arc::new(sources),
+            Arc::new(Mutex::new(sources)),
             cmd_rx,
             msg_tx,
             intercept::types::ConnectionCtx::WebSocket(intercept::types::WebSocketConnectionCtx {
