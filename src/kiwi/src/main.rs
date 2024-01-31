@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build Kafka sources
     for topic in topics {
-        let source = build_kafka_source(topic.name.clone(), bootstrap_servers)?;
+        let source = build_kafka_source(topic.name.clone(), bootstrap_servers, group_prefix)?;
         sources
             .lock()
             .expect("poisoned lock")

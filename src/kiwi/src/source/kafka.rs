@@ -141,7 +141,11 @@ impl Source for KafkaTopicSource {
 }
 
 impl KafkaTopicSource {
-    pub fn new(topic: String, bootstrap_servers: &Vec<String>) -> anyhow::Result<Self> {
+    pub fn new(
+        topic: String,
+        bootstrap_servers: &[String],
+        group_id_prefix: &str,
+    ) -> anyhow::Result<Self> {
         // TODO: make this capacity configurable
         let (tx, _) = tokio::sync::broadcast::channel::<SourceMessage>(100);
         let (metadata_tx, mut metadata_rx) =
@@ -153,8 +157,10 @@ impl KafkaTopicSource {
 
         let mut client_config = ClientConfig::new();
 
+        let group_id = format!("{}{}", group_id_prefix, nanoid::nanoid!());
+
         client_config.extend(btreemap! {
-            "group.id".to_string() => format!("kiwi-{}", nanoid::nanoid!()),
+            "group.id".to_string() => group_id,
             // We don't care about offset committing, since we are just relaying the latest messages.
             "enable.auto.commit".to_string() => "false".to_string(),
             "enable.partition.eof".to_string() => "false".to_string(),
@@ -249,9 +255,6 @@ impl KafkaTopicSource {
                                 }
                             }
                         }
-                        _ => {
-                            tracing::warn!("Received unexpected metadata type");
-                        }
                     }
                 } else {
                     tracing::debug!(
@@ -276,7 +279,7 @@ pub struct PartitionMetadata {
     pub lo_watermark: i64,
 }
 
-fn create_metadata_client(bootstrap_servers: &Vec<String>) -> anyhow::Result<Client> {
+fn create_metadata_client(bootstrap_servers: &[String]) -> anyhow::Result<Client> {
     let mut client_config = ClientConfig::new();
 
     client_config.extend(btreemap! {
@@ -321,7 +324,7 @@ fn fetch_partition_metadata(
 }
 
 pub fn start_partition_discovery(
-    bootstrap_servers: &Vec<String>,
+    bootstrap_servers: &[String],
     topic_sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     poll_interval: Duration,
 ) -> anyhow::Result<()> {
@@ -370,9 +373,14 @@ pub fn start_partition_discovery(
 
 pub fn build_source(
     topic: String,
-    bootstrap_servers: &Vec<String>,
+    bootstrap_servers: &[String],
+    group_id_prefix: &str,
 ) -> anyhow::Result<Box<dyn Source + Send + Sync + 'static>> {
-    Ok(Box::new(KafkaTopicSource::new(topic, bootstrap_servers)?))
+    Ok(Box::new(KafkaTopicSource::new(
+        topic,
+        bootstrap_servers,
+        group_id_prefix,
+    )?))
 }
 
 impl From<OwnedMessage> for SourceResult {
