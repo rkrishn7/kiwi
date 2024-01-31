@@ -57,12 +57,12 @@ async fn test_kafka_source() -> anyhow::Result<()> {
     let config = create_temp_config(
         r#"
 sources:
-    kafka:
-        bootstrap_servers:
-            - 'kafka:19092'
-        topics:
-            - name: topic1
+    - type: kafka
+      topic: topic1
 
+kafka:
+    bootstrap_servers:
+        - 'kafka:19092'
 server:
     address: '127.0.0.1:8000'
     "#,
@@ -154,12 +154,14 @@ async fn test_closes_subscription_on_changed_metadata() -> anyhow::Result<()> {
     let config = create_temp_config(
         r#"
 sources:
-    kafka:
-        bootstrap_servers:
-            - 'kafka:19092'
-        topics:
-            - name: topic1
+    - type: kafka
+        topic: topic1
 
+kafka:
+    partition_discovery_enabled: true
+    partition_discovery_interval_ms: 5000
+    bootstrap_servers:
+        - 'kafka:19092'
 server:
     address: '127.0.0.1:8000'
     "#,
@@ -212,7 +214,10 @@ server:
         .await
         .unwrap();
 
-    let resp = read.next().await.expect("Expected response")?;
+    let resp = tokio::select! {
+        resp = read.next() => resp.expect("Expected response")?,
+        _ = tokio::time::sleep(Duration::from_secs(7)) => panic!("Expected timely response"),
+    };
 
     let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
 
