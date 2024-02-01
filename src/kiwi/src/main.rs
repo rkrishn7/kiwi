@@ -92,7 +92,14 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
-    kiwi::ws::serve(&listen_addr, sources, intercept_hook, authenticate_hook).await?;
+    kiwi::ws::serve(
+        &listen_addr,
+        sources,
+        intercept_hook,
+        authenticate_hook,
+        config.subscriber,
+    )
+    .await?;
 
     Ok(())
 }

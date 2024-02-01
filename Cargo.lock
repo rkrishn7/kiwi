@@ -980,6 +980,7 @@ dependencies = [
  "nanoid",
  "once_cell",
  "rdkafka",
+ "ringbuf",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1405,6 +1406,15 @@ dependencies = [
  "rustc-hash",
  "slice-group-by",
  "smallvec",
+]
+
+[[package]]
+name = "ringbuf"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79abed428d1fd2a128201cec72c5f6938e2da607c6f3745f769fabea399d950a"
+dependencies = [
+ "crossbeam-utils",
 ]
 
 [[package]]

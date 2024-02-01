@@ -9,6 +9,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::WebSocketStream;
+use tracing::subscriber;
 
 use crate::hook::authenticate::types::Outcome;
 use crate::hook::authenticate::Authenticate;
@@ -28,6 +29,7 @@ pub async fn serve<I, A>(
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     intercept_hook: Option<I>,
     authenticate_hook: Option<A>,
+    subscriber_config: crate::config::Subscriber,
 ) -> anyhow::Result<()>
 where
     I: Intercept + Clone + Send + Sync + 'static,
@@ -41,6 +43,7 @@ where
         let sources = Arc::clone(&sources);
         let intercept_hook = intercept_hook.clone();
         let authenticate_hook = authenticate_hook.clone();
+        let subscriber_config = subscriber_config.clone();
         tokio::spawn(async move {
             match perform_handshake(stream, authenticate_hook).await {
                 Ok((mut ws_stream, auth_ctx)) => {
@@ -54,6 +57,7 @@ where
                         auth_ctx,
                         connection_ctx,
                         intercept_hook,
+                        subscriber_config,
                     )
                     .await;
                 }
@@ -120,6 +124,7 @@ async fn drive_stream<S, I>(
     auth_ctx: Option<AuthCtx>,
     connection_ctx: ConnectionCtx,
     intercept_hook: Option<I>,
+    subscriber_config: crate::config::Subscriber,
 ) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -135,6 +140,7 @@ where
         connection_ctx,
         auth_ctx,
         intercept_hook,
+        subscriber_config,
     );
 
     // Spawn the ingest actor. If it terminates, the connection should be closed

@@ -4,13 +4,68 @@ use std::sync::{Arc, Mutex};
 
 use futures::stream::select_all::select_all;
 use futures::StreamExt;
+use ringbuf::{HeapRb, Rb};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::config::Subscriber as SubscriberConfig;
 use crate::hook::intercept::{self, Intercept};
-use crate::protocol::{Command, CommandResponse, Message, Notice};
+use crate::protocol::{self, Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId, SourceMessage, SourceResult};
+
+pub struct SourceSubscription {
+    source_stream: BroadcastStream<SourceMessage>,
+    mode: SourceSubscriptionMode,
+}
+
+pub enum SourceSubscriptionMode {
+    Pull {
+        requests: u64,
+        lag: u64,
+        buffer: Option<HeapRb<SourceResult>>,
+        lag_notice_threshold: Option<u64>,
+    },
+    Push,
+}
+
+impl SourceSubscriptionMode {
+    fn from_mode(
+        mode: protocol::SubscriptionMode,
+        buffer_capacity: Option<usize>,
+        lag_notice_threshold: Option<u64>,
+    ) -> Self {
+        match mode {
+            protocol::SubscriptionMode::Pull => Self::Pull {
+                requests: 0,
+                lag: 0,
+                buffer: buffer_capacity.map(|cap| HeapRb::new(cap)),
+                lag_notice_threshold,
+            },
+            protocol::SubscriptionMode::Push => Self::Push,
+        }
+    }
+}
+
+impl SourceSubscription {
+    fn new(
+        source_stream: BroadcastStream<SourceMessage>,
+        mode: protocol::SubscriptionMode,
+        buffer_capacity: Option<usize>,
+        lag_notice_threshold: Option<u64>,
+    ) -> Self {
+        Self {
+            source_stream,
+            mode: SourceSubscriptionMode::from_mode(mode, buffer_capacity, lag_notice_threshold),
+        }
+    }
+}
+
+// if we are in pull mode:
+//     - if requests is Some(0), start buffering messages
+//     - if requests is Some(n > 0), forward the next n messages
+// if we are in push mode:
+//     - send messages as they come in
 
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
@@ -21,12 +76,13 @@ pub struct IngestActor<I> {
     msg_tx: UnboundedSender<Message>,
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     /// Subscriptions this actor currently maintains for its handle
-    subscriptions: BTreeMap<SourceId, BroadcastStream<SourceMessage>>,
+    subscriptions: BTreeMap<SourceId, SourceSubscription>,
     connection_ctx: intercept::types::ConnectionCtx,
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
     /// Plugin that is executed before forwarding events to the client
     intercept: Option<I>,
+    subscriber_config: SubscriberConfig,
 }
 
 #[derive(Debug)]
@@ -51,6 +107,7 @@ where
         connection_ctx: intercept::types::ConnectionCtx,
         auth_ctx: Option<intercept::types::AuthCtx>,
         intercept: Option<I>,
+        subscriber_config: SubscriberConfig,
     ) -> Self {
         Self {
             cmd_rx,
@@ -60,6 +117,7 @@ where
             auth_ctx,
             subscriptions: Default::default(),
             intercept,
+            subscriber_config,
         }
     }
 
@@ -68,10 +126,11 @@ where
         loop {
             let next_state = {
                 // Combine all the current subscriptions into a single stream
-                let mut combined =
-                    select_all(self.subscriptions.iter_mut().map(|(source_id, stream)| {
-                        crate::util::stream::with_id(source_id, stream)
-                    }));
+                let mut combined = select_all(self.subscriptions.iter_mut().map(
+                    |(source_id, subscription)| {
+                        crate::util::stream::with_id(source_id, &mut subscription.source_stream)
+                    },
+                ));
 
                 tokio::select! {
                     biased;
@@ -102,8 +161,14 @@ where
                 }
                 IngestActorState::ReceivedSourceEvent((source_id, event)) => match event {
                     SourceMessage::Result(event) => {
-                        if let Err(e) = self.forward_event(event).await {
-                            tracing::error!("Error while forwarding source event: {:?}", e);
+                        if let Err(error) =
+                            self.handle_source_result(source_id.clone(), event).await
+                        {
+                            tracing::error!(
+                                source_id = source_id,
+                                error = ?error,
+                                "Failed to handle result from source"
+                            );
                         }
                     }
                     SourceMessage::MetadataChanged(message) => {
@@ -135,32 +200,45 @@ where
             }
         }
 
+        tracing::debug!(connection = ?self.connection_ctx, "Ingest actor completed normally");
+
         Ok(())
     }
 
     async fn handle_command(&mut self, command: Command) -> CommandResponse {
         match command {
-            Command::Subscribe { source_id } => match self.subscriptions.entry(source_id.clone()) {
-                btree_map::Entry::Occupied(_) => CommandResponse::SubscribeError {
-                    source_id,
-                    error: "Source already has an active subscription".to_string(),
-                },
-                btree_map::Entry::Vacant(entry) => {
-                    let response = if let Some(source) =
-                        self.sources.lock().expect("poisoned lock").get(&source_id)
-                    {
-                        entry.insert(BroadcastStream::new(source.subscribe()));
-                        CommandResponse::SubscribeOk { source_id }
-                    } else {
-                        CommandResponse::SubscribeError {
-                            source_id,
-                            error: "No source exists with the specified ID".to_string(),
-                        }
-                    };
+            Command::Subscribe { source_id, mode } => {
+                match self.subscriptions.entry(source_id.clone()) {
+                    btree_map::Entry::Occupied(_) => CommandResponse::SubscribeError {
+                        source_id,
+                        error: "Source already has an active subscription".to_string(),
+                    },
+                    btree_map::Entry::Vacant(entry) => {
+                        let response = if let Some(source) =
+                            self.sources.lock().expect("poisoned lock").get(&source_id)
+                        {
+                            let source_stream = BroadcastStream::new(source.subscribe());
+                            let subscription = SourceSubscription::new(
+                                source_stream,
+                                mode,
+                                self.subscriber_config.buffer_capacity,
+                                self.subscriber_config.lag_notice_threshold,
+                            );
 
-                    response
+                            entry.insert(subscription);
+
+                            CommandResponse::SubscribeOk { source_id }
+                        } else {
+                            CommandResponse::SubscribeError {
+                                source_id,
+                                error: "No source exists with the specified ID".to_string(),
+                            }
+                        };
+
+                        response
+                    }
                 }
-            },
+            }
             Command::Unsubscribe { source_id } => {
                 match self.subscriptions.entry(source_id.clone()) {
                     btree_map::Entry::Occupied(entry) => {
@@ -173,10 +251,39 @@ where
                     },
                 }
             }
+            Command::Request { source_id, n } => {
+                match self.subscriptions.entry(source_id.clone()) {
+                    btree_map::Entry::Occupied(mut entry) => {
+                        let subscription = entry.get_mut();
+                        match &mut subscription.mode {
+                            SourceSubscriptionMode::Pull { requests, .. } => {
+                                *requests += n;
+                            }
+                            SourceSubscriptionMode::Push => {
+                                return CommandResponse::RequestError {
+                                    source_id,
+                                    error: "Source is not in pull mode".to_string(),
+                                };
+                            }
+                        }
+
+                        entry.remove();
+                        CommandResponse::UnsubscribeOk { source_id }
+                    }
+                    btree_map::Entry::Vacant(_) => CommandResponse::UnsubscribeError {
+                        source_id,
+                        error: "Source does not have an active subscription".to_string(),
+                    },
+                }
+            }
         }
     }
 
-    async fn forward_event(&mut self, mut event: SourceResult) -> anyhow::Result<()> {
+    /// Processes a source result by passing it through the intercept hook
+    async fn process_source_result(
+        &self,
+        mut event: SourceResult,
+    ) -> anyhow::Result<Option<SourceResult>> {
         let plugin_event_ctx: intercept::types::EventCtx = event.clone().into();
         let plugin_ctx = intercept::types::Context {
             auth: self.auth_ctx.clone(),
@@ -193,11 +300,9 @@ where
             None
         };
 
-        match action {
-            Some(intercept::types::Action::Discard) => (),
-            None | Some(intercept::types::Action::Forward) => {
-                self.msg_tx.send(Message::Result(event.into()))?;
-            }
+        let processed: Option<SourceResult> = match action {
+            Some(intercept::types::Action::Discard) => None,
+            None | Some(intercept::types::Action::Forward) => Some(event.into()),
             Some(intercept::types::Action::Transform(payload)) => {
                 // Update event with new payload
                 match event {
@@ -206,8 +311,71 @@ where
                     }
                 }
 
-                self.msg_tx.send(Message::Result(event.into()))?;
+                Some(event.into())
             }
+        };
+
+        Ok(processed)
+    }
+
+    async fn handle_source_result(
+        &mut self,
+        source_id: SourceId,
+        result: SourceResult,
+    ) -> anyhow::Result<()> {
+        let result = self.process_source_result(result).await?;
+        let subscription = self.subscriptions.get_mut(&source_id);
+
+        if let Some(subscription) = subscription {
+            if let Some(result) = result {
+                match &mut subscription.mode {
+                    SourceSubscriptionMode::Pull {
+                        requests,
+                        lag,
+                        buffer,
+                        lag_notice_threshold,
+                    } => {
+                        if *requests > 0 {
+                            if let Some(Some(buffered)) = buffer.as_mut().map(|b| b.pop()) {
+                                buffer
+                                    .as_mut()
+                                    .expect("must exist")
+                                    .push(result)
+                                    .expect("must not be full");
+                                self.msg_tx.send(Message::Result(buffered.into()))?;
+                            } else {
+                                self.msg_tx.send(Message::Result(result.into()))?;
+                            }
+
+                            *requests -= 1;
+                            *lag = 0;
+                        } else {
+                            if let Some(buffer) = buffer {
+                                if let Some(_) = buffer.push_overwrite(result) {
+                                    *lag += 1;
+                                }
+
+                                if let Some(lag_notice_threshold) = lag_notice_threshold {
+                                    if *lag >= *lag_notice_threshold {
+                                        self.msg_tx.send(Message::Notice(Notice::Lag {
+                                            source: source_id,
+                                            count: *lag,
+                                        }))?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    SourceSubscriptionMode::Push => {
+                        self.msg_tx.send(Message::Result(result.into()))?;
+                    }
+                }
+            }
+        } else {
+            tracing::warn!(
+                source_id = source_id,
+                "Received event for source with no active subscription"
+            );
         }
 
         Ok(())
@@ -270,6 +438,7 @@ mod tests {
         cmd_tx
             .send(Command::Subscribe {
                 source_id: source_id.to_string(),
+                mode: protocol::SubscriptionMode::Push,
             })
             .unwrap();
     }
@@ -318,6 +487,7 @@ mod tests {
             }),
             None,
             pre_forward,
+            Default::default(),
         );
 
         let handle = tokio::spawn(actor.run());
@@ -577,7 +747,7 @@ mod tests {
 
         tokio::spawn(async move {
             // Simulate a source that sends 100 msgs/sec for 10 seconds
-            for i in 0..1000 {
+            for _ in 0..1000 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
                 source_tx
