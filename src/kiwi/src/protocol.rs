@@ -97,6 +97,12 @@ pub enum Message {
     Result(SourceResult),
 }
 
+impl From<source::SourceResult> for Message {
+    fn from(value: source::SourceResult) -> Self {
+        Message::Result(value.into())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceResult {
     #[serde(with = "crate::util::serde::base64")]

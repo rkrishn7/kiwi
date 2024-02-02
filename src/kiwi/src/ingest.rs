@@ -14,69 +14,139 @@ use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{self, Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId, SourceMessage, SourceResult};
 
-pub struct SourceSubscription {
-    source_stream: BroadcastStream<SourceMessage>,
-    mode: SourceSubscriptionMode,
+pub enum SubscriptionState<T> {
+    Pull(PullSubscriptionState<T>),
+    Push(PushSubscriptionState),
 }
 
-pub enum SourceSubscriptionMode {
-    Pull {
-        requests: u64,
-        lag: u64,
-        buffer: Option<HeapRb<SourceResult>>,
-        lag_notice_threshold: Option<u64>,
-    },
-    Push,
+pub struct PushSubscriptionState;
+
+pub struct PullSubscriptionState<T> {
+    requests: u64,
+    lag: u64,
+    buffer: Option<HeapRb<T>>,
+    lag_notice_threshold: Option<u64>,
 }
 
-impl SourceSubscriptionMode {
-    fn from_mode(
-        mode: protocol::SubscriptionMode,
-        buffer_capacity: Option<usize>,
-        lag_notice_threshold: Option<u64>,
-    ) -> Self {
-        match mode {
-            protocol::SubscriptionMode::Pull => Self::Pull {
-                requests: 0,
-                lag: 0,
-                buffer: buffer_capacity.map(|cap| HeapRb::new(cap)),
-                lag_notice_threshold,
-            },
-            protocol::SubscriptionMode::Push => Self::Push,
+impl<T> PullSubscriptionState<T> {
+    #[inline(always)]
+    fn decrement_requests(&mut self) {
+        self.requests -= 1;
+    }
+
+    #[inline(always)]
+    fn add_requests(&mut self, n: u64) {
+        self.requests += n;
+    }
+
+    #[inline(always)]
+    fn has_requests(&self) -> bool {
+        self.requests > 0
+    }
+
+    #[inline(always)]
+    fn requests(&self) -> u64 {
+        self.requests
+    }
+
+    #[inline(always)]
+    fn should_emit_lag_notice(&self) -> bool {
+        self.lag_notice_threshold
+            .map(|t| self.lag >= t)
+            .unwrap_or(false)
+    }
+
+    #[inline(always)]
+    fn reset_lag(&mut self) {
+        self.lag = 0;
+    }
+
+    #[inline(always)]
+    fn increment_lag(&mut self) {
+        self.lag += 1;
+    }
+
+    fn react_incoming<C>(
+        &mut self,
+        tx: &UnboundedSender<C>,
+        incoming: Option<T>,
+    ) -> anyhow::Result<()>
+    where
+        C: From<T> + std::marker::Send + std::marker::Sync + 'static,
+    {
+        let first = match self.buffer.as_mut() {
+            Some(buffer) => incoming.and_then(|i| buffer.push_overwrite(i)),
+            None => incoming,
+        };
+
+        if !self.has_requests() {
+            if first.is_some() {
+                self.increment_lag();
+            }
+        } else {
+            if let Some(first) = first {
+                if self.has_requests() {
+                    tx.send(first.into())?;
+                    self.decrement_requests();
+                }
+            }
+
+            while self.has_requests() {
+                if let Some(buffered) = self.buffer.as_mut().and_then(|b| b.pop()) {
+                    tx.send(buffered.into())?;
+                    self.decrement_requests();
+                } else {
+                    break;
+                }
+            }
+
+            self.reset_lag();
         }
+
+        Ok(())
     }
 }
 
-impl SourceSubscription {
-    fn new(
+pub struct Subscription<T> {
+    source_stream: BroadcastStream<SourceMessage>,
+    state: SubscriptionState<T>,
+}
+
+impl<T> Subscription<T> {
+    fn from_mode(
         source_stream: BroadcastStream<SourceMessage>,
         mode: protocol::SubscriptionMode,
         buffer_capacity: Option<usize>,
         lag_notice_threshold: Option<u64>,
     ) -> Self {
+        let state = match mode {
+            protocol::SubscriptionMode::Pull => SubscriptionState::Pull(PullSubscriptionState {
+                requests: 0,
+                lag: 0,
+                buffer: buffer_capacity.map(|cap| HeapRb::new(cap)),
+                lag_notice_threshold,
+            }),
+            protocol::SubscriptionMode::Push => SubscriptionState::Push(PushSubscriptionState),
+        };
+
         Self {
             source_stream,
-            mode: SourceSubscriptionMode::from_mode(mode, buffer_capacity, lag_notice_threshold),
+            state,
         }
     }
 }
-
-// if we are in pull mode:
-//     - if requests is Some(0), start buffering messages
-//     - if requests is Some(n > 0), forward the next n messages
-// if we are in push mode:
-//     - send messages as they come in
 
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
 /// - Reading events from subscribed sources, processing them, and
 ///   forwarding them along its active subscriptions
+/// TODO: Rename to SubscriptionManager
 pub struct IngestActor<I> {
     cmd_rx: UnboundedReceiver<Command>,
     msg_tx: UnboundedSender<Message>,
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     /// Subscriptions this actor currently maintains for its handle
-    subscriptions: BTreeMap<SourceId, SourceSubscription>,
+    subscriptions: BTreeMap<SourceId, Subscription<SourceResult>>,
     connection_ctx: intercept::types::ConnectionCtx,
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
@@ -155,19 +225,18 @@ where
 
             match next_state {
                 IngestActorState::ReceivedCommand(cmd) => {
-                    let response = self.handle_command(cmd).await;
-
-                    self.msg_tx.send(Message::CommandResponse(response))?;
+                    self.handle_command(cmd).await?;
                 }
                 IngestActorState::ReceivedSourceEvent((source_id, event)) => match event {
-                    SourceMessage::Result(event) => {
-                        if let Err(error) =
-                            self.handle_source_result(source_id.clone(), event).await
+                    SourceMessage::Result(incoming) => {
+                        if let Err(error) = self
+                            .forward_source_results(source_id.clone(), Some(incoming))
+                            .await
                         {
                             tracing::error!(
                                 source_id = source_id,
                                 error = ?error,
-                                "Failed to handle result from source"
+                                "Failed to handle incoming result from source"
                             );
                         }
                     }
@@ -183,19 +252,10 @@ where
                 },
                 IngestActorState::Lagged((source_id, count)) => {
                     tracing::warn!("Actor lagged behind by {} messages for source {}. Continuing to read from oldest available message", count, source_id);
-
-                    // If we fail to send the message, it means the receiving half of the message channel
-                    // was dropped, in which case we want to complete execution
-                    if self
-                        .msg_tx
-                        .send(Message::Notice(Notice::Lag {
-                            source: source_id,
-                            count,
-                        }))
-                        .is_err()
-                    {
-                        break;
-                    }
+                    self.msg_tx.send(Message::Notice(Notice::Lag {
+                        source: source_id,
+                        count,
+                    }))?;
                 }
             }
         }
@@ -205,10 +265,10 @@ where
         Ok(())
     }
 
-    async fn handle_command(&mut self, command: Command) -> CommandResponse {
+    async fn handle_command(&mut self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::Subscribe { source_id, mode } => {
-                match self.subscriptions.entry(source_id.clone()) {
+                let response = match self.subscriptions.entry(source_id.clone()) {
                     btree_map::Entry::Occupied(_) => CommandResponse::SubscribeError {
                         source_id,
                         error: "Source already has an active subscription".to_string(),
@@ -218,7 +278,7 @@ where
                             self.sources.lock().expect("poisoned lock").get(&source_id)
                         {
                             let source_stream = BroadcastStream::new(source.subscribe());
-                            let subscription = SourceSubscription::new(
+                            let subscription = Subscription::from_mode(
                                 source_stream,
                                 mode,
                                 self.subscriber_config.buffer_capacity,
@@ -237,10 +297,12 @@ where
 
                         response
                     }
-                }
+                };
+
+                self.msg_tx.send(Message::CommandResponse(response))?;
             }
             Command::Unsubscribe { source_id } => {
-                match self.subscriptions.entry(source_id.clone()) {
+                let response = match self.subscriptions.entry(source_id.clone()) {
                     btree_map::Entry::Occupied(entry) => {
                         entry.remove();
                         CommandResponse::UnsubscribeOk { source_id }
@@ -249,34 +311,48 @@ where
                         source_id,
                         error: "Source does not have an active subscription".to_string(),
                     },
-                }
+                };
+
+                self.msg_tx.send(Message::CommandResponse(response))?;
             }
             Command::Request { source_id, n } => {
                 match self.subscriptions.entry(source_id.clone()) {
                     btree_map::Entry::Occupied(mut entry) => {
                         let subscription = entry.get_mut();
-                        match &mut subscription.mode {
-                            SourceSubscriptionMode::Pull { requests, .. } => {
-                                *requests += n;
+                        match &mut subscription.state {
+                            SubscriptionState::Pull(subscription) => {
+                                subscription.add_requests(n);
+                                self.msg_tx.send(Message::CommandResponse(
+                                    CommandResponse::RequestOk {
+                                        source_id,
+                                        requests: subscription.requests(),
+                                    },
+                                ))?;
+                                subscription.react_incoming(&self.msg_tx, None)?;
                             }
-                            SourceSubscriptionMode::Push => {
-                                return CommandResponse::RequestError {
-                                    source_id,
-                                    error: "Source is not in pull mode".to_string(),
-                                };
+                            SubscriptionState::Push(_) => {
+                                self.msg_tx.send(Message::CommandResponse(
+                                    CommandResponse::RequestError {
+                                        source_id,
+                                        error: "Source is not in pull mode".to_string(),
+                                    },
+                                ))?;
                             }
                         }
-
-                        entry.remove();
-                        CommandResponse::UnsubscribeOk { source_id }
                     }
-                    btree_map::Entry::Vacant(_) => CommandResponse::UnsubscribeError {
-                        source_id,
-                        error: "Source does not have an active subscription".to_string(),
-                    },
+                    btree_map::Entry::Vacant(_) => {
+                        self.msg_tx.send(Message::CommandResponse(
+                            CommandResponse::UnsubscribeError {
+                                source_id,
+                                error: "Source does not have an active subscription".to_string(),
+                            },
+                        ))?;
+                    }
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Processes a source result by passing it through the intercept hook
@@ -318,56 +394,34 @@ where
         Ok(processed)
     }
 
-    async fn handle_source_result(
+    /// Forward the source result along the connection's message channel
+    async fn forward_source_results(
         &mut self,
         source_id: SourceId,
-        result: SourceResult,
+        incoming: Option<SourceResult>,
     ) -> anyhow::Result<()> {
-        let result = self.process_source_result(result).await?;
+        let incoming = match incoming {
+            Some(incoming) => self.process_source_result(incoming).await?,
+            None => None,
+        };
+
         let subscription = self.subscriptions.get_mut(&source_id);
 
         if let Some(subscription) = subscription {
-            if let Some(result) = result {
-                match &mut subscription.mode {
-                    SourceSubscriptionMode::Pull {
-                        requests,
-                        lag,
-                        buffer,
-                        lag_notice_threshold,
-                    } => {
-                        if *requests > 0 {
-                            if let Some(Some(buffered)) = buffer.as_mut().map(|b| b.pop()) {
-                                buffer
-                                    .as_mut()
-                                    .expect("must exist")
-                                    .push(result)
-                                    .expect("must not be full");
-                                self.msg_tx.send(Message::Result(buffered.into()))?;
-                            } else {
-                                self.msg_tx.send(Message::Result(result.into()))?;
-                            }
+            match &mut subscription.state {
+                SubscriptionState::Pull(pull_state) => {
+                    pull_state.react_incoming(&self.msg_tx, incoming)?;
 
-                            *requests -= 1;
-                            *lag = 0;
-                        } else {
-                            if let Some(buffer) = buffer {
-                                if let Some(_) = buffer.push_overwrite(result) {
-                                    *lag += 1;
-                                }
-
-                                if let Some(lag_notice_threshold) = lag_notice_threshold {
-                                    if *lag >= *lag_notice_threshold {
-                                        self.msg_tx.send(Message::Notice(Notice::Lag {
-                                            source: source_id,
-                                            count: *lag,
-                                        }))?;
-                                    }
-                                }
-                            }
-                        }
+                    if pull_state.should_emit_lag_notice() {
+                        self.msg_tx.send(Message::Notice(Notice::Lag {
+                            source: source_id,
+                            count: pull_state.lag,
+                        }))?;
                     }
-                    SourceSubscriptionMode::Push => {
-                        self.msg_tx.send(Message::Result(result.into()))?;
+                }
+                SubscriptionState::Push(_) => {
+                    if let Some(incoming) = incoming {
+                        self.msg_tx.send(incoming.into())?;
                     }
                 }
             }
