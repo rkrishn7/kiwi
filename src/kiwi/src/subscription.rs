@@ -368,6 +368,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pull_stream_no_buffer() {
+        let (tx, rx) = broadcast::channel(10);
+        let mut subscription = Subscription::from_mode(
+            BroadcastStream::new(rx),
+            protocol::SubscriptionMode::Pull,
+            None,
+        );
+
+        for _ in 0..5 {
+            let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                partition: 0,
+                offset: 0,
+                topic: "test".into(),
+                key: None,
+                payload: None,
+                timestamp: None,
+            }));
+
+            tx.send(message).unwrap();
+        }
+
+        let mut stream = subscription.source_stream();
+
+        for i in 1..=5 {
+            let next = stream.next().await.unwrap();
+            assert!(matches!(
+                next,
+                Err(SubscriptionRecvError::SubscriberLag(lag)) if lag == i
+            ));
+        }
+
+        drop(stream);
+
+        let pull = subscription.as_pull();
+
+        pull.add_requests(1);
+
+        let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            partition: 0,
+            offset: 0,
+            topic: "test".into(),
+            key: None,
+            payload: None,
+            timestamp: None,
+        }));
+
+        tx.send(message).unwrap();
+
+        let mut stream = subscription.source_stream();
+
+        let next = stream.next().await.unwrap();
+
+        assert!(matches!(next, Ok(_)));
+        assert_eq!(next.unwrap().len(), 1);
+
+        drop(stream);
+
+        let pull = subscription.as_pull();
+
+        // There should be no more remaining requests
+        assert_eq!(pull.requests(), 0);
+    }
+
+    #[tokio::test]
     async fn test_pull_stream_requests() {
         let (tx, rx) = broadcast::channel(10);
         let mut subscription = Subscription::from_mode(
