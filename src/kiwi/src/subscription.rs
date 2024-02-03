@@ -265,6 +265,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pull_subscription_notifies_metadata_changed() {
+        let (tx, rx) = broadcast::channel(1);
+        let mut subscription = Subscription::from_mode(
+            BroadcastStream::new(rx),
+            protocol::SubscriptionMode::Pull,
+            None,
+        );
+        let mut stream = subscription.source_stream();
+
+        tx.send(SourceMessage::MetadataChanged("test".into()))
+            .unwrap();
+
+        let result = stream.next().await.unwrap();
+        assert_eq!(
+            result.unwrap(),
+            vec![SourceMessage::MetadataChanged("test".into())]
+        );
+    }
+
+    #[tokio::test]
     async fn test_pull_stream_buffers_results() {
         let (tx, rx) = broadcast::channel(10);
         let mut subscription = Subscription::from_mode(

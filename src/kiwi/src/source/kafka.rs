@@ -22,7 +22,7 @@ use crate::hook;
 
 use super::{Source, SourceId, SourceMessage, SourceMetadata, SourceResult};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KafkaSourceResult {
     /// Event key
     pub key: Option<Vec<u8>>,

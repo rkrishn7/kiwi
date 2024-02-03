@@ -2,7 +2,7 @@ use tokio::sync::broadcast::Receiver;
 
 pub mod kafka;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceMessage {
     /// A source-specific event
     Result(SourceResult),
@@ -10,7 +10,7 @@ pub enum SourceMessage {
     MetadataChanged(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceResult {
     Kafka(kafka::KafkaSourceResult),
 }
