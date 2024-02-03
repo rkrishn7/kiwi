@@ -249,6 +249,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pull_subscription_notifies_process_lag() {
+        let (tx, rx) = broadcast::channel(1);
+        let mut subscription = Subscription::from_mode(
+            BroadcastStream::new(rx),
+            protocol::SubscriptionMode::Pull,
+            None,
+        );
+        let mut stream = subscription.source_stream();
+
+        for _ in 0..2 {
+            let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                partition: 0,
+                offset: 0,
+                topic: "test".into(),
+                key: None,
+                payload: None,
+                timestamp: None,
+            }));
+
+            tx.send(message).unwrap();
+        }
+
+        assert!(matches!(
+            stream.next().await.unwrap(),
+            Err(SubscriptionRecvError::ProcessLag(1))
+        ));
+    }
+
+    #[tokio::test]
     async fn test_pull_subscription_notifies_source_dropped() {
         let (tx, rx) = broadcast::channel(1);
         let mut subscription = Subscription::from_mode(
@@ -312,6 +341,66 @@ mod tests {
         // The buffer is at capacity, but there have been no requests
         // so nothing should be available to read
         assert!(matches!(fut.await, Err(_)));
+    }
+
+    #[tokio::test]
+    async fn test_pull_stream_partially_drains_buffer() {
+        let (tx, rx) = broadcast::channel(10);
+        let mut subscription = Subscription::from_mode(
+            BroadcastStream::new(rx),
+            protocol::SubscriptionMode::Pull,
+            Some(5),
+        );
+
+        for _ in 0..5 {
+            let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                partition: 0,
+                offset: 0,
+                topic: "test".into(),
+                key: None,
+                payload: None,
+                timestamp: None,
+            }));
+
+            tx.send(message).unwrap();
+        }
+
+        {
+            let mut stream = subscription.source_stream();
+            for _ in 0..5 {
+                let _ = stream.next().now_or_never();
+            }
+        }
+
+        let pull = subscription.as_pull();
+
+        pull.add_requests(3);
+
+        let mut stream = subscription.source_stream();
+
+        // Pass another message through the stream to trigger a subsequent poll
+        let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            partition: 0,
+            offset: -1,
+            topic: "test".into(),
+            key: None,
+            payload: None,
+            timestamp: None,
+        }));
+
+        tx.send(message).unwrap();
+
+        let result = stream.next().await.unwrap().unwrap();
+
+        assert_eq!(result.len(), 3);
+
+        drop(stream);
+
+        let pull = subscription.as_pull();
+
+        // The buffer should still have 3 messages remaining
+        assert_eq!(pull.buffer.as_ref().unwrap().len(), 3);
+        assert_eq!(pull.requests(), 0);
     }
 
     #[tokio::test]
