@@ -4,137 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use futures::stream::select_all::select_all;
 use futures::StreamExt;
-use ringbuf::{HeapRb, Rb};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::config::Subscriber as SubscriberConfig;
 use crate::hook::intercept::{self, Intercept};
-use crate::protocol::{self, Command, CommandResponse, Message, Notice};
-use crate::source::{Source, SourceId, SourceMessage, SourceResult};
-
-pub enum SubscriptionState<T> {
-    Pull(PullSubscriptionState<T>),
-    Push(PushSubscriptionState),
-}
-
-pub struct PushSubscriptionState;
-
-pub struct PullSubscriptionState<T> {
-    requests: u64,
-    lag: u64,
-    buffer: Option<HeapRb<T>>,
-    lag_notice_threshold: Option<u64>,
-}
-
-impl<T> PullSubscriptionState<T> {
-    #[inline(always)]
-    fn decrement_requests(&mut self) {
-        self.requests -= 1;
-    }
-
-    #[inline(always)]
-    fn add_requests(&mut self, n: u64) {
-        self.requests += n;
-    }
-
-    #[inline(always)]
-    fn has_requests(&self) -> bool {
-        self.requests > 0
-    }
-
-    #[inline(always)]
-    fn requests(&self) -> u64 {
-        self.requests
-    }
-
-    #[inline(always)]
-    fn should_emit_lag_notice(&self) -> bool {
-        self.lag_notice_threshold
-            .map(|t| self.lag >= t)
-            .unwrap_or(false)
-    }
-
-    #[inline(always)]
-    fn reset_lag(&mut self) {
-        self.lag = 0;
-    }
-
-    #[inline(always)]
-    fn increment_lag(&mut self) {
-        self.lag += 1;
-    }
-
-    fn react_incoming<C>(
-        &mut self,
-        tx: &UnboundedSender<C>,
-        incoming: Option<T>,
-    ) -> anyhow::Result<()>
-    where
-        C: From<T> + std::marker::Send + std::marker::Sync + 'static,
-    {
-        let first = match self.buffer.as_mut() {
-            Some(buffer) => incoming.and_then(|i| buffer.push_overwrite(i)),
-            None => incoming,
-        };
-
-        if !self.has_requests() {
-            if first.is_some() {
-                self.increment_lag();
-            }
-        } else {
-            if let Some(first) = first {
-                if self.has_requests() {
-                    tx.send(first.into())?;
-                    self.decrement_requests();
-                }
-            }
-
-            while self.has_requests() {
-                if let Some(buffered) = self.buffer.as_mut().and_then(|b| b.pop()) {
-                    tx.send(buffered.into())?;
-                    self.decrement_requests();
-                } else {
-                    break;
-                }
-            }
-
-            self.reset_lag();
-        }
-
-        Ok(())
-    }
-}
-
-pub struct Subscription<T> {
-    source_stream: BroadcastStream<SourceMessage>,
-    state: SubscriptionState<T>,
-}
-
-impl<T> Subscription<T> {
-    fn from_mode(
-        source_stream: BroadcastStream<SourceMessage>,
-        mode: protocol::SubscriptionMode,
-        buffer_capacity: Option<usize>,
-        lag_notice_threshold: Option<u64>,
-    ) -> Self {
-        let state = match mode {
-            protocol::SubscriptionMode::Pull => SubscriptionState::Pull(PullSubscriptionState {
-                requests: 0,
-                lag: 0,
-                buffer: buffer_capacity.map(|cap| HeapRb::new(cap)),
-                lag_notice_threshold,
-            }),
-            protocol::SubscriptionMode::Push => SubscriptionState::Push(PushSubscriptionState),
-        };
-
-        Self {
-            source_stream,
-            state,
-        }
-    }
-}
+use crate::protocol::{Command, CommandResponse, Message, Notice};
+use crate::source::{self, Source, SourceId, SourceMessage, SourceResult};
+use crate::subscription::{Subscription, SubscriptionRecvError};
 
 /// This actor is responsible for the following tasks:
 /// - Processing commands as they become available
@@ -146,7 +23,7 @@ pub struct IngestActor<I> {
     msg_tx: UnboundedSender<Message>,
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     /// Subscriptions this actor currently maintains for its handle
-    subscriptions: BTreeMap<SourceId, Subscription<SourceResult>>,
+    subscriptions: BTreeMap<SourceId, Subscription>,
     connection_ctx: intercept::types::ConnectionCtx,
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
@@ -162,7 +39,7 @@ pub struct IngestActor<I> {
 /// may depart from the traditional concept of a state machine
 enum IngestActorState<T> {
     ReceivedCommand(Command),
-    ReceivedSourceEvent((SourceId, T)),
+    ReceivedSourceResults((SourceId, Vec<T>)),
     Lagged((SourceId, u64)),
 }
 
@@ -196,11 +73,15 @@ where
         loop {
             let next_state = {
                 // Combine all the current subscriptions into a single stream
+                let start = std::time::Instant::now();
                 let mut combined = select_all(self.subscriptions.iter_mut().map(
                     |(source_id, subscription)| {
-                        crate::util::stream::with_id(source_id, &mut subscription.source_stream)
+                        crate::util::stream::with_id(source_id, subscription.source_stream())
                     },
                 ));
+                let duration = start.elapsed();
+
+                println!("Time constructing streams is: {:?}", duration);
 
                 tokio::select! {
                     biased;
@@ -216,8 +97,9 @@ where
                     // handle later signals to add a new subscription via `cmd_tx`
                     Some((source_id, res)) = combined.next() => {
                         match res {
-                            Ok(event) => IngestActorState::ReceivedSourceEvent((source_id.clone(), event)),
-                            Err(BroadcastStreamRecvError::Lagged(count)) => IngestActorState::Lagged((source_id.clone(), count))
+                            Ok(results) => IngestActorState::ReceivedSourceResults((source_id.clone(), results)),
+                            Err(SubscriptionRecvError::ProcessLag(count)) => IngestActorState::Lagged((source_id.clone(), count)),
+                            Err(SubscriptionRecvError::SubscriberLag(count)) => IngestActorState::Lagged((source_id.clone(), count)),
                         }
                     },
                 }
@@ -227,29 +109,35 @@ where
                 IngestActorState::ReceivedCommand(cmd) => {
                     self.handle_command(cmd).await?;
                 }
-                IngestActorState::ReceivedSourceEvent((source_id, event)) => match event {
-                    SourceMessage::Result(incoming) => {
-                        if let Err(error) = self
-                            .forward_source_results(source_id.clone(), Some(incoming))
-                            .await
-                        {
-                            tracing::error!(
-                                source_id = source_id,
-                                error = ?error,
-                                "Failed to handle incoming result from source"
-                            );
+                IngestActorState::ReceivedSourceResults((source_id, results)) => {
+                    for result in results {
+                        let source_id = source_id.clone();
+                        match result {
+                            SourceMessage::Result(incoming) => {
+                                if let Err(error) = self
+                                    .forward_source_result(source_id.clone(), incoming)
+                                    .await
+                                {
+                                    tracing::error!(
+                                        source_id = source_id,
+                                        error = ?error,
+                                        "Failed to handle incoming result from source"
+                                    );
+                                }
+                            }
+                            SourceMessage::MetadataChanged(message) => {
+                                if self.subscriptions.remove(&source_id).is_some() {
+                                    self.msg_tx.send(Message::Notice(
+                                        Notice::SubscriptionClosed {
+                                            source: source_id,
+                                            message: Some(message),
+                                        },
+                                    ))?;
+                                }
+                            }
                         }
                     }
-                    SourceMessage::MetadataChanged(message) => {
-                        if self.subscriptions.remove(&source_id).is_some() {
-                            self.msg_tx
-                                .send(Message::Notice(Notice::SubscriptionClosed {
-                                    source: source_id,
-                                    message: Some(message),
-                                }))?;
-                        }
-                    }
-                },
+                }
                 IngestActorState::Lagged((source_id, count)) => {
                     tracing::warn!("Actor lagged behind by {} messages for source {}. Continuing to read from oldest available message", count, source_id);
                     self.msg_tx.send(Message::Notice(Notice::Lag {
@@ -319,8 +207,8 @@ where
                 match self.subscriptions.entry(source_id.clone()) {
                     btree_map::Entry::Occupied(mut entry) => {
                         let subscription = entry.get_mut();
-                        match &mut subscription.state {
-                            SubscriptionState::Pull(subscription) => {
+                        match subscription {
+                            Subscription::Pull(subscription) => {
                                 subscription.add_requests(n);
                                 self.msg_tx.send(Message::CommandResponse(
                                     CommandResponse::RequestOk {
@@ -328,9 +216,9 @@ where
                                         requests: subscription.requests(),
                                     },
                                 ))?;
-                                subscription.react_incoming(&self.msg_tx, None)?;
+                                // subscription.react_incoming(&self.msg_tx, None)?;
                             }
-                            SubscriptionState::Push(_) => {
+                            Subscription::Push(_) => {
                                 self.msg_tx.send(Message::CommandResponse(
                                     CommandResponse::RequestError {
                                         source_id,
@@ -395,31 +283,32 @@ where
     }
 
     /// Forward the source result along the connection's message channel
-    async fn forward_source_results(
+    async fn forward_source_result(
         &mut self,
         source_id: SourceId,
-        incoming: Option<SourceResult>,
+        incoming: SourceResult,
     ) -> anyhow::Result<()> {
-        let incoming = match incoming {
-            Some(incoming) => self.process_source_result(incoming).await?,
-            None => None,
-        };
+        let incoming = self.process_source_result(incoming).await?;
 
         let subscription = self.subscriptions.get_mut(&source_id);
 
         if let Some(subscription) = subscription {
-            match &mut subscription.state {
-                SubscriptionState::Pull(pull_state) => {
-                    pull_state.react_incoming(&self.msg_tx, incoming)?;
+            match subscription {
+                Subscription::Pull(_) => {
+                    // pull_state.react_incoming(&self.msg_tx, incoming)?;
 
-                    if pull_state.should_emit_lag_notice() {
-                        self.msg_tx.send(Message::Notice(Notice::Lag {
-                            source: source_id,
-                            count: pull_state.lag,
-                        }))?;
+                    // if pull_state.should_emit_lag_notice() {
+                    //     self.msg_tx.send(Message::Notice(Notice::Lag {
+                    //         source: source_id,
+                    //         count: pull_state.lag,
+                    //     }))?;
+                    // }
+
+                    if let Some(incoming) = incoming {
+                        self.msg_tx.send(incoming.into())?;
                     }
                 }
-                SubscriptionState::Push(_) => {
+                Subscription::Push(_) => {
                     if let Some(incoming) = incoming {
                         self.msg_tx.send(incoming.into())?;
                     }
@@ -438,6 +327,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::protocol;
     use crate::source::{SourceMessage, SourceMetadata};
 
     use super::*;

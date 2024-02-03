@@ -39,16 +39,16 @@ server:
 subscriber:
   # For pull-based subscribers, kiwi is capable of maintaining internal buffers to
   # handle backpressure. This setting controls the maximum number of events that may
-  # be buffered for a subscription. Once the capacity is reached, events will be
-  # dropped in a LRU fashion.
+  # be buffered for a subscription. Once the capacity is reached, buffered events will
+  # be dropped in a LRU fashion.
   # 
-  # If the capacity is set to 0 (i.e. not enabled), kiwi will drop events when a 
-  # pull-based subscriber is unable to keep up with its respective source result frequency
-  ## Optional (default: 0)
-  buffer_capacity: 0
+  # If this option is not set, kiwi will drop events when a pull-based subscriber is 
+  # unable to keep up with its respective source result frequency.
+  ## Optional
+  buffer_capacity: 3
 
   # The maximum number of events that a pull-based subscriber is permitted to
   # lag behind the source before kiwi emits a lag notice. If not set, kiwi will
   # not emit lag notices
   ## Optional
-  lag_notice_threshold:
+  lag_notice_threshold: 2
