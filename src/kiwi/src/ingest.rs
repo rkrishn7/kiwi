@@ -10,7 +10,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::config::Subscriber as SubscriberConfig;
 use crate::hook::intercept::{self, Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
-use crate::source::{self, Source, SourceId, SourceMessage, SourceResult};
+use crate::source::{Source, SourceId, SourceMessage, SourceResult};
 use crate::subscription::{Subscription, SubscriptionRecvError};
 
 /// This actor is responsible for the following tasks:
@@ -19,16 +19,22 @@ use crate::subscription::{Subscription, SubscriptionRecvError};
 ///   forwarding them along its active subscriptions
 /// TODO: Rename to SubscriptionManager
 pub struct IngestActor<I> {
+    /// Channel for receiving commands from the connection
     cmd_rx: UnboundedReceiver<Command>,
+    /// Channel for sending messages to the connection
     msg_tx: UnboundedSender<Message>,
+    /// Map of available sources
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     /// Subscriptions this actor currently maintains for its handle
     subscriptions: BTreeMap<SourceId, Subscription>,
+    /// Context for the connection that this actor is associated with
     connection_ctx: intercept::types::ConnectionCtx,
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
     /// Plugin that is executed before forwarding events to the client
     intercept: Option<I>,
+    /// Subscriber configuration that applies to all subscriptions managed
+    /// by this actor
     subscriber_config: SubscriberConfig,
 }
 
@@ -38,9 +44,12 @@ pub struct IngestActor<I> {
 /// events cause state transitions. As a result, there is no starting state which
 /// may depart from the traditional concept of a state machine
 enum IngestActorState<T> {
-    ReceivedCommand(Command),
-    ReceivedSourceResults((SourceId, Vec<T>)),
-    Lagged((SourceId, u64)),
+    /// A command has been received from the connection
+    Command(Command),
+    /// Results have been received from a source
+    SourceResults((SourceId, Vec<T>)),
+    /// An error has occurred while processing source results
+    Error((SourceId, SubscriptionRecvError)),
 }
 
 impl<I> IngestActor<I>
@@ -73,22 +82,23 @@ where
         loop {
             let next_state = {
                 // Combine all the current subscriptions into a single stream
-                let start = std::time::Instant::now();
+                //
+                // TODO(rkrishn7): This is likely expensive, especially as the number of subscriptions
+                // increases. We should consider a more efficient way to combine source streams
                 let mut combined = select_all(self.subscriptions.iter_mut().map(
                     |(source_id, subscription)| {
                         crate::util::stream::with_id(source_id, subscription.source_stream())
                     },
                 ));
-                let duration = start.elapsed();
-
-                println!("Time constructing streams is: {:?}", duration);
 
                 tokio::select! {
                     biased;
 
                     maybe_cmd = self.cmd_rx.recv() => {
                         match maybe_cmd {
-                            Some(cmd) => IngestActorState::ReceivedCommand(cmd),
+                            Some(cmd) => IngestActorState::Command(cmd),
+                            // If the command rx hung up, it indicates the connection
+                            // has been dropped so we can safely exit
                             None => break,
                         }
                     },
@@ -97,33 +107,23 @@ where
                     // handle later signals to add a new subscription via `cmd_tx`
                     Some((source_id, res)) = combined.next() => {
                         match res {
-                            Ok(results) => IngestActorState::ReceivedSourceResults((source_id.clone(), results)),
-                            Err(SubscriptionRecvError::ProcessLag(count)) => IngestActorState::Lagged((source_id.clone(), count)),
-                            Err(SubscriptionRecvError::SubscriberLag(count)) => IngestActorState::Lagged((source_id.clone(), count)),
+                            Ok(results) => IngestActorState::SourceResults((source_id.clone(), results)),
+                            Err(err) => IngestActorState::Error((source_id.clone(), err)),
                         }
                     },
                 }
             };
 
             match next_state {
-                IngestActorState::ReceivedCommand(cmd) => {
+                IngestActorState::Command(cmd) => {
                     self.handle_command(cmd).await?;
                 }
-                IngestActorState::ReceivedSourceResults((source_id, results)) => {
+                IngestActorState::SourceResults((source_id, results)) => {
                     for result in results {
                         let source_id = source_id.clone();
                         match result {
                             SourceMessage::Result(incoming) => {
-                                if let Err(error) = self
-                                    .forward_source_result(source_id.clone(), incoming)
-                                    .await
-                                {
-                                    tracing::error!(
-                                        source_id = source_id,
-                                        error = ?error,
-                                        "Failed to handle incoming result from source"
-                                    );
-                                }
+                                self.forward_source_result(incoming).await?;
                             }
                             SourceMessage::MetadataChanged(message) => {
                                 if self.subscriptions.remove(&source_id).is_some() {
@@ -138,13 +138,34 @@ where
                         }
                     }
                 }
-                IngestActorState::Lagged((source_id, count)) => {
-                    tracing::warn!("Actor lagged behind by {} messages for source {}. Continuing to read from oldest available message", count, source_id);
-                    self.msg_tx.send(Message::Notice(Notice::Lag {
-                        source: source_id,
-                        count,
-                    }))?;
-                }
+                IngestActorState::Error((source_id, err)) => match err {
+                    SubscriptionRecvError::SubscriberLag(lag) => {
+                        if let Some(threshold) = self.subscriber_config.lag_notice_threshold {
+                            if lag >= threshold {
+                                self.msg_tx.send(Message::Notice(Notice::Lag {
+                                    source: source_id,
+                                    count: lag,
+                                }))?;
+                            }
+                        }
+                    }
+                    SubscriptionRecvError::ProcessLag(lag) => {
+                        tracing::warn!(lag, source_id, connection = ?self.connection_ctx, "Receiver is lagging");
+                        self.msg_tx.send(Message::Notice(Notice::Lag {
+                            source: source_id,
+                            count: lag,
+                        }))?;
+                    }
+                    SubscriptionRecvError::SourceClosed => {
+                        if self.subscriptions.remove(&source_id).is_some() {
+                            self.msg_tx
+                                .send(Message::Notice(Notice::SubscriptionClosed {
+                                    source: source_id,
+                                    message: Some("Source closed".to_string()),
+                                }))?;
+                        }
+                    }
+                },
             }
         }
 
@@ -170,7 +191,6 @@ where
                                 source_stream,
                                 mode,
                                 self.subscriber_config.buffer_capacity,
-                                self.subscriber_config.lag_notice_threshold,
                             );
 
                             entry.insert(subscription);
@@ -266,7 +286,7 @@ where
 
         let processed: Option<SourceResult> = match action {
             Some(intercept::types::Action::Discard) => None,
-            None | Some(intercept::types::Action::Forward) => Some(event.into()),
+            None | Some(intercept::types::Action::Forward) => Some(event),
             Some(intercept::types::Action::Transform(payload)) => {
                 // Update event with new payload
                 match event {
@@ -275,7 +295,7 @@ where
                     }
                 }
 
-                Some(event.into())
+                Some(event)
             }
         };
 
@@ -283,42 +303,10 @@ where
     }
 
     /// Forward the source result along the connection's message channel
-    async fn forward_source_result(
-        &mut self,
-        source_id: SourceId,
-        incoming: SourceResult,
-    ) -> anyhow::Result<()> {
+    async fn forward_source_result(&mut self, incoming: SourceResult) -> anyhow::Result<()> {
         let incoming = self.process_source_result(incoming).await?;
-
-        let subscription = self.subscriptions.get_mut(&source_id);
-
-        if let Some(subscription) = subscription {
-            match subscription {
-                Subscription::Pull(_) => {
-                    // pull_state.react_incoming(&self.msg_tx, incoming)?;
-
-                    // if pull_state.should_emit_lag_notice() {
-                    //     self.msg_tx.send(Message::Notice(Notice::Lag {
-                    //         source: source_id,
-                    //         count: pull_state.lag,
-                    //     }))?;
-                    // }
-
-                    if let Some(incoming) = incoming {
-                        self.msg_tx.send(incoming.into())?;
-                    }
-                }
-                Subscription::Push(_) => {
-                    if let Some(incoming) = incoming {
-                        self.msg_tx.send(incoming.into())?;
-                    }
-                }
-            }
-        } else {
-            tracing::warn!(
-                source_id = source_id,
-                "Received event for source with no active subscription"
-            );
+        if let Some(incoming) = incoming {
+            self.msg_tx.send(incoming.into())?;
         }
 
         Ok(())

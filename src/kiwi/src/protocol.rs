@@ -4,19 +4,14 @@ use thiserror::Error;
 use crate::source::{self, SourceId};
 
 /// The subscription mode to use for a source subscription
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum SubscriptionMode {
     /// Pull subscriptions require the client to request events from the source
     Pull,
     /// Push subscriptions send events to the client as they are produced
+    #[default]
     Push,
-}
-
-impl Default for SubscriptionMode {
-    fn default() -> Self {
-        SubscriptionMode::Push
-    }
 }
 
 /// Commands are issued by kiwi clients to the server

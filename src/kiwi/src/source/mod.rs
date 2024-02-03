@@ -15,6 +15,23 @@ pub enum SourceResult {
     Kafka(kafka::KafkaSourceResult),
 }
 
+impl From<SourceResult> for SourceMessage {
+    fn from(value: SourceResult) -> Self {
+        SourceMessage::Result(value)
+    }
+}
+
+impl TryFrom<SourceMessage> for SourceResult {
+    type Error = SourceMessage;
+
+    fn try_from(value: SourceMessage) -> Result<Self, Self::Error> {
+        match value {
+            SourceMessage::Result(result) => Ok(result),
+            _ => Err(value),
+        }
+    }
+}
+
 pub enum SourceMetadata {
     Kafka(kafka::KafkaSourceMetadata),
 }

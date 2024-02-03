@@ -7,7 +7,7 @@ use rdkafka::{
 use std::{io::Write, process, time::Duration};
 use tokio_tungstenite::{connect_async, tungstenite};
 
-use kiwi::protocol::{Command, CommandResponse, Message, Notice};
+use kiwi::protocol::{Command, CommandResponse, Message, Notice, SubscriptionMode};
 
 use tempfile::NamedTempFile;
 
@@ -84,6 +84,7 @@ server:
 
     let cmd = Command::Subscribe {
         source_id: "topic1".into(),
+        mode: SubscriptionMode::Push,
     };
 
     write
@@ -183,6 +184,7 @@ server:
 
     let cmd = Command::Subscribe {
         source_id: "topic1".into(),
+        mode: SubscriptionMode::Push,
     };
 
     write
