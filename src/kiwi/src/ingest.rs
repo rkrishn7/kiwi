@@ -236,7 +236,6 @@ where
                                         requests: subscription.requests(),
                                     },
                                 ))?;
-                                // subscription.react_incoming(&self.msg_tx, None)?;
                             }
                             Subscription::Push(_) => {
                                 self.msg_tx.send(Message::CommandResponse(
@@ -276,18 +275,15 @@ where
         };
 
         let action = if let Some(plugin) = self.intercept.clone() {
-            let result =
-                tokio::task::spawn_blocking(move || plugin.intercept(&plugin_ctx)).await??;
-
-            Some(result)
+            tokio::task::spawn_blocking(move || plugin.intercept(&plugin_ctx)).await??
         } else {
-            None
+            intercept::types::Action::Forward
         };
 
         let processed: Option<SourceResult> = match action {
-            Some(intercept::types::Action::Discard) => None,
-            None | Some(intercept::types::Action::Forward) => Some(event),
-            Some(intercept::types::Action::Transform(payload)) => {
+            intercept::types::Action::Discard => None,
+            intercept::types::Action::Forward => Some(event),
+            intercept::types::Action::Transform(payload) => {
                 // Update event with new payload
                 match event {
                     SourceResult::Kafka(ref mut kafka_event) => {
@@ -366,11 +362,24 @@ mod tests {
         })
     }
 
-    fn send_subscribe_cmd(cmd_tx: &UnboundedSender<Command>, source_id: &str) {
+    fn send_subscribe_cmd(
+        cmd_tx: &UnboundedSender<Command>,
+        source_id: &str,
+        mode: Option<protocol::SubscriptionMode>,
+    ) {
         cmd_tx
             .send(Command::Subscribe {
                 source_id: source_id.to_string(),
-                mode: protocol::SubscriptionMode::Push,
+                mode: mode.unwrap_or_default(),
+            })
+            .unwrap();
+    }
+
+    fn send_request_cmd(cmd_tx: &UnboundedSender<Command>, source_id: &str, n: u64) {
+        cmd_tx
+            .send(Command::Request {
+                source_id: source_id.to_string(),
+                n,
             })
             .unwrap();
     }
@@ -387,11 +396,13 @@ mod tests {
         pre_forward: Option<P>,
         test_source_ids: Vec<String>,
         source_channel_capacity: usize,
+        subscriber_config: Option<SubscriberConfig>,
     ) -> (
         UnboundedSender<Command>,
         UnboundedReceiver<Message>,
         Sender<SourceMessage>,
         tokio::task::JoinHandle<anyhow::Result<()>>,
+        Arc<Mutex<BTreeMap<String, Box<dyn Source + Send + Sync>>>>,
     ) {
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
         let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
@@ -410,8 +421,10 @@ mod tests {
             )
         }));
 
+        let sources = Arc::new(Mutex::new(sources));
+
         let actor = IngestActor::new(
-            Arc::new(Mutex::new(sources)),
+            Arc::clone(&sources),
             cmd_rx,
             msg_tx,
             intercept::types::ConnectionCtx::WebSocket(intercept::types::WebSocketConnectionCtx {
@@ -419,12 +432,12 @@ mod tests {
             }),
             None,
             pre_forward,
-            Default::default(),
+            subscriber_config.unwrap_or_default(),
         );
 
         let handle = tokio::spawn(actor.run());
 
-        (cmd_tx, msg_rx, source_tx, handle)
+        (cmd_tx, msg_rx, source_tx, handle, sources)
     }
 
     async fn recv_subscribe_ok(rx: &mut UnboundedReceiver<Message>, original_source_id: &str) {
@@ -437,6 +450,68 @@ mod tests {
             }
             m => panic!(
                 "actor should respond with a subscribe ok message. Instead responded with {:?}",
+                m
+            ),
+        }
+    }
+
+    async fn recv_request_ok(
+        rx: &mut UnboundedReceiver<Message>,
+        original_source_id: &str,
+        expected_requests: Option<u64>,
+    ) {
+        match rx.recv().await.unwrap() {
+            Message::CommandResponse(CommandResponse::RequestOk {
+                source_id,
+                requests,
+            }) => {
+                assert_eq!(source_id, original_source_id);
+                if let Some(expected_requests) = expected_requests {
+                    assert_eq!(requests, expected_requests);
+                }
+            }
+            m => panic!(
+                "actor should respond with a request ok message. Instead responded with {:?}",
+                m
+            ),
+        }
+    }
+
+    async fn recv_request_err(rx: &mut UnboundedReceiver<Message>, original_source_id: &str) {
+        match rx.recv().await.unwrap() {
+            Message::CommandResponse(CommandResponse::RequestError { source_id, .. }) => {
+                assert_eq!(source_id, original_source_id);
+            }
+            m => panic!(
+                "actor should respond with a request error message. Instead responded with {:?}",
+                m
+            ),
+        }
+    }
+
+    async fn recv_subscription_closed(
+        rx: &mut UnboundedReceiver<Message>,
+        original_source_id: &str,
+    ) {
+        match rx.recv().await.unwrap() {
+            Message::Notice(Notice::SubscriptionClosed { source, .. }) => {
+                assert_eq!(source, original_source_id);
+            }
+            m => panic!(
+                "actor should respond with a subscription closed notice. Instead responded with {:?}",
+                m
+            ),
+        }
+    }
+
+    async fn recv_lag_notice(rx: &mut UnboundedReceiver<Message>, source_id: &str, lag: u64) {
+        match rx.recv().await.unwrap() {
+            Message::Notice(Notice::Lag { source, count }) => {
+                assert_eq!(source, source_id);
+                assert_eq!(count, lag);
+            }
+            m => panic!(
+                "actor should respond with a lag notice. Instead responded with {:?}",
                 m
             ),
         }
@@ -486,8 +561,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_actor_completes_on_cmd_rx_drop() {
-        let (cmd_tx, _, _, actor_handle) =
-            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100);
+        let (cmd_tx, _, _, actor_handle, _) =
+            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100, None);
 
         // Drop the command channel, which should cause the actor to complete
         drop(cmd_tx);
@@ -500,35 +575,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_source_subscribing() {
-        let (cmd_tx, mut msg_rx, _, _) =
-            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100);
+        let (cmd_tx, mut msg_rx, _, _, _) =
+            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100, None);
 
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
         // Ensure resubscribing to the same source results in an error
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_err(&mut msg_rx, "test").await;
 
         // Subscribting to a non-existent source should result in an error
-        send_subscribe_cmd(&cmd_tx, "test2");
+        send_subscribe_cmd(&cmd_tx, "test2", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_err(&mut msg_rx, "test2").await;
     }
 
     #[tokio::test]
     async fn test_source_unsubscribing() {
-        let (cmd_tx, mut msg_rx, _, _) =
-            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100);
+        let (cmd_tx, mut msg_rx, _, _, _) =
+            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100, None);
 
         // Check that unsubscribing from a non-existent subscription results in an error
         send_unsubscribe_cmd(&cmd_tx, "test");
 
         recv_unsubscribe_err(&mut msg_rx, "test").await;
 
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
@@ -540,10 +615,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_discard_action() {
-        let (cmd_tx, mut msg_rx, source_tx, _) =
-            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100);
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor(Some(DiscardPlugin), vec!["test".to_string()], 100, None);
 
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
@@ -574,10 +649,10 @@ mod tests {
             }
         }
 
-        let (cmd_tx, mut msg_rx, source_tx, _) =
-            spawn_actor(Some(ForwardPlugin), vec!["test".to_string()], 100);
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor(Some(ForwardPlugin), vec!["test".to_string()], 100, None);
 
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
@@ -619,10 +694,10 @@ mod tests {
             }
         }
 
-        let (cmd_tx, mut msg_rx, source_tx, _) =
-            spawn_actor(Some(TransformPlugin), vec!["test".to_string()], 100);
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor(Some(TransformPlugin), vec!["test".to_string()], 100, None);
 
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
@@ -653,7 +728,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_lag_notices() {
+    async fn test_source_closes_on_metadata_changed() {
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        source_tx
+            .send(SourceMessage::MetadataChanged("Metadata changed".into()))
+            .unwrap();
+
+        recv_subscription_closed(&mut msg_rx, "test").await;
+    }
+
+    #[tokio::test]
+    async fn test_source_closes_on_upstream_source_closed() {
+        let (cmd_tx, mut msg_rx, source_tx, _, sources) =
+            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        drop(source_tx);
+
+        // Drop the source, which should cause the actor to emit a subscription closed notice
+        let mut sources = sources.lock().unwrap();
+
+        sources.remove("test");
+
+        recv_subscription_closed(&mut msg_rx, "test").await;
+    }
+
+    #[tokio::test]
+    async fn test_emits_lag_notice_on_subscriber_lag() {
+        let (cmd_tx, mut msg_rx, source_tx, _, _) = spawn_actor::<DiscardPlugin>(
+            None,
+            vec!["test".to_string()],
+            100,
+            Some(SubscriberConfig {
+                buffer_capacity: None,
+                lag_notice_threshold: Some(2),
+            }),
+        );
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Pull));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        for _ in 0..2 {
+            source_tx
+                .send(SourceMessage::Result(test_source_result()))
+                .unwrap();
+        }
+
+        recv_lag_notice(&mut msg_rx, "test", 2).await;
+    }
+
+    #[tokio::test]
+    async fn test_disallows_requests_cmds_for_push_subscriptions() {
+        let (cmd_tx, mut msg_rx, _, _, _) =
+            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        send_request_cmd(&cmd_tx, "test", 3);
+
+        recv_request_err(&mut msg_rx, "test").await;
+    }
+
+    #[tokio::test]
+    async fn test_handles_pull_subscription_requests() {
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor::<DiscardPlugin>(None, vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Pull));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        send_request_cmd(&cmd_tx, "test", 3);
+
+        recv_request_ok(&mut msg_rx, "test", Some(3)).await;
+
+        send_request_cmd(&cmd_tx, "test", 10);
+
+        recv_request_ok(&mut msg_rx, "test", Some(13)).await;
+
+        for _ in 0..13 {
+            source_tx
+                .send(SourceMessage::Result(test_source_result()))
+                .unwrap();
+        }
+
+        let received_all_messages = {
+            for _ in 0..13 {
+                let msg = msg_rx.recv().await.unwrap();
+                match msg {
+                    Message::Result(_) => (),
+                    _ => panic!("actor should forward message when transform action is returned from plugin"),
+                }
+            }
+            true
+        };
+
+        assert!(received_all_messages);
+    }
+
+    #[tokio::test]
+    async fn test_emits_lag_notice_on_process_lag() {
         #[derive(Debug, Clone)]
         /// Simulates a slow executing plugin
         struct SlowPlugin;
@@ -670,10 +856,10 @@ mod tests {
             }
         }
 
-        let (cmd_tx, mut msg_rx, source_tx, _) =
-            spawn_actor(Some(SlowPlugin), vec!["test".to_string()], 100);
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor(Some(SlowPlugin), vec!["test".to_string()], 100, None);
 
-        send_subscribe_cmd(&cmd_tx, "test");
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
 
         recv_subscribe_ok(&mut msg_rx, "test").await;
 
