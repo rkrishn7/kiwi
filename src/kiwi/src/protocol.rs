@@ -3,17 +3,51 @@ use thiserror::Error;
 
 use crate::source::{self, SourceId};
 
+/// The subscription mode to use for a source subscription
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SubscriptionMode {
+    /// Pull subscriptions require the client to request events from the source
+    Pull,
+    /// Push subscriptions send events to the client as they are produced
+    #[default]
+    Push,
+}
+
+/// Commands are issued by kiwi clients to the server
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-/// A request that is sent from a client to the server
 pub enum Command {
+    /// Subscribe to the specified source
     #[serde(rename_all = "camelCase")]
-    Subscribe { source_id: SourceId },
+    Subscribe {
+        /// The ID for the source to subscribe to
+        source_id: SourceId,
+        /// The subscription mode to use
+        #[serde(default)]
+        mode: SubscriptionMode,
+    },
+    /// Unsubscribe from the specified source
     #[serde(rename_all = "camelCase")]
-    Unsubscribe { source_id: SourceId },
+    Unsubscribe {
+        /// The ID for the source to unsubscribe from. The source must be
+        /// associated with an active subscription for the request to be valid
+        source_id: SourceId,
+    },
+    /// Request the next `n` events from the source. This is only valid for
+    /// pull-based subscriptions
+    #[serde(rename_all = "camelCase")]
+    Request {
+        /// The ID of the source to request data from
+        source_id: SourceId,
+        /// The (additive) number of events to request
+        n: u64,
+    },
 }
 
+/// Command responses are issued by the server to clients in response to
+/// commands
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -26,6 +60,10 @@ pub enum CommandResponse {
     SubscribeError { source_id: SourceId, error: String },
     #[serde(rename_all = "camelCase")]
     UnsubscribeError { source_id: SourceId, error: String },
+    #[serde(rename_all = "camelCase")]
+    RequestOk { source_id: SourceId, requests: u64 },
+    #[serde(rename_all = "camelCase")]
+    RequestError { source_id: SourceId, error: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -52,6 +90,12 @@ pub enum Message {
     CommandResponse(CommandResponse),
     Notice(Notice),
     Result(SourceResult),
+}
+
+impl From<source::SourceResult> for Message {
+    fn from(value: source::SourceResult) -> Self {
+        Message::Result(value.into())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -112,7 +156,8 @@ mod tests {
         assert_eq!(
             deserialized,
             Command::Subscribe {
-                source_id: "test".into()
+                source_id: "test".into(),
+                mode: SubscriptionMode::Push
             }
         );
 

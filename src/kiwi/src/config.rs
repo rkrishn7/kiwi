@@ -9,6 +9,8 @@ pub struct Config {
     pub hooks: Option<Hooks>,
     pub server: Server,
     pub kafka: Option<Kafka>,
+    #[serde(default)]
+    pub subscriber: Subscriber,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -53,6 +55,15 @@ pub struct Hooks {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Server {
     pub address: String,
+}
+
+/// General subscriber configuration
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct Subscriber {
+    #[serde(default)]
+    pub buffer_capacity: Option<usize>,
+    #[serde(default)]
+    pub lag_notice_threshold: Option<u64>,
 }
 
 impl Config {

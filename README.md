@@ -1,6 +1,6 @@
 # 🥝 Kiwi
 
-[![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![codecov](https://codecov.io/gh/rkrishn7/kiwi/graph/badge.svg?token=G6QRFUHNM4)](https://codecov.io/gh/rkrishn7/kiwi)
+[![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![CircleCI](https://dl.circleci.com/status-badge/img/gh/rkrishn7/kiwi/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/rkrishn7/kiwi/tree/main) [![codecov](https://codecov.io/gh/rkrishn7/kiwi/graph/badge.svg?token=G6QRFUHNM4)](https://codecov.io/gh/rkrishn7/kiwi)
 
 Kiwi is a WebSocket gateway for real-time event sources. It implements a simple protocol for clients to subscribe to configured sources, ensuring that they stay reactive and up-to-date with the latest data.
 

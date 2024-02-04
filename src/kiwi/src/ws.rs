@@ -10,10 +10,10 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::WebSocketStream;
 
+use crate::connection::ConnectionManager;
 use crate::hook::authenticate::types::Outcome;
 use crate::hook::authenticate::Authenticate;
 use crate::hook::intercept::types::{AuthCtx, ConnectionCtx, WebSocketConnectionCtx};
-use crate::ingest::IngestActor;
 
 use crate::hook::intercept::Intercept;
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
@@ -28,6 +28,7 @@ pub async fn serve<I, A>(
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     intercept_hook: Option<I>,
     authenticate_hook: Option<A>,
+    subscriber_config: crate::config::Subscriber,
 ) -> anyhow::Result<()>
 where
     I: Intercept + Clone + Send + Sync + 'static,
@@ -41,6 +42,7 @@ where
         let sources = Arc::clone(&sources);
         let intercept_hook = intercept_hook.clone();
         let authenticate_hook = authenticate_hook.clone();
+        let subscriber_config = subscriber_config.clone();
         tokio::spawn(async move {
             match perform_handshake(stream, authenticate_hook).await {
                 Ok((mut ws_stream, auth_ctx)) => {
@@ -54,6 +56,7 @@ where
                         auth_ctx,
                         connection_ctx,
                         intercept_hook,
+                        subscriber_config,
                     )
                     .await;
                 }
@@ -120,6 +123,7 @@ async fn drive_stream<S, I>(
     auth_ctx: Option<AuthCtx>,
     connection_ctx: ConnectionCtx,
     intercept_hook: Option<I>,
+    subscriber_config: crate::config::Subscriber,
 ) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -128,13 +132,14 @@ where
     let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
-    let actor = IngestActor::new(
+    let actor = ConnectionManager::new(
         sources,
         cmd_rx,
         msg_tx,
         connection_ctx,
         auth_ctx,
         intercept_hook,
+        subscriber_config,
     );
 
     // Spawn the ingest actor. If it terminates, the connection should be closed
@@ -215,83 +220,4 @@ where
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        hook::intercept::{types::Action, wasm::WasmInterceptHook},
-        source::kafka::KafkaTopicSource,
-    };
-
-    use super::*;
-    use futures::stream::FusedStream;
-    use std::{
-        collections::BTreeMap,
-        task::{Context, Poll},
-    };
-    use tokio::io::{AsyncWriteExt, ReadBuf};
-    use tokio_tungstenite::tungstenite::protocol::Role;
-    use tokio_tungstenite::WebSocketStream;
-
-    use std::{io, io::Cursor, pin::Pin};
-
-    struct TestInterceptHook {}
-
-    impl Intercept for TestInterceptHook {
-        fn intercept(&self, _: &crate::hook::intercept::types::Context) -> anyhow::Result<Action> {
-            Ok(Action::Forward)
-        }
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_invalid_command() {
-        let (_, mut incoming) = tokio::io::duplex(1024);
-        incoming
-            .write(&[
-                0x89, 0x02, 0x01, 0x02, 0x8a, 0x01, 0x03, 0x01, 0x07, 0x48, 0x65, 0x6c, 0x6c, 0x6f,
-                0x2c, 0x20, 0x80, 0x06, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x82, 0x03, 0x01, 0x02,
-                0x03,
-            ])
-            .await
-            .unwrap();
-        // let incoming = Cursor::new(Vec::with_capacity(1024));
-        let mut stream = WebSocketStream::from_raw_socket(incoming, Role::Client, None).await;
-
-        let sources: BTreeMap<String, KafkaTopicSource> = BTreeMap::new();
-        // let auth_ctx = None;
-        let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx {
-            addr: "127.0.0.1:3000".parse().unwrap(),
-        });
-
-        // stream
-        //     .send(tokio_tungstenite::tungstenite::protocol::Message::Text(
-        //         serde_json::to_string(&Command::Subscribe {
-        //             source_id: "test".into(),
-        //         })
-        //         .unwrap(),
-        //     ))
-        //     .await
-        //     .unwrap();
-
-        // tokio::select! {
-        //     biased;
-
-        //     _ = drive_stream(
-        //         &mut stream,
-        //         Arc::new(sources),
-        //         auth_ctx,
-        //         connection_ctx,
-        //         None::<WasmInterceptHook>,
-        //     ) => (),
-        //     _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-        //         panic!("Expected stream to terminate");
-        //     }
-        // }
-
-        // TODO: Assert the stream was closed with the appropriate error
-
-        assert!(stream.is_terminated());
-    }
 }

@@ -7,15 +7,48 @@ hooks:
   # This hook executes ...
   # authenticate: ''
 
+# Source configuration
+## Required
 sources:
   - topic: topic1
     type: kafka
 
+# Kafka configuration
+## Required if any Kafka sources are defined, otherwise optional
 kafka:
+  # Whether to enable partition discovery. If enabled, kiwi will periodically
+  # query the Kafka cluster to discover new partitions.
+  ## Optional (default: true)
   partition_discovery_enabled: true
+  # The interval at which to query the Kafka cluster to discover new partitions
+  ## Optional (default: 300000)
   partition_discovery_interval_ms: 300000
+  # Bootstrap servers to connect to
+  ## Required
   bootstrap_servers:
     - 'localhost:9092'
 
+# WebSocket server configuration
+## Required
 server:
   address: '127.0.0.1:8000'
+
+# Subscribers are clients that connect to kiwi and receive events from the sources
+# they are subscribed to
+## Optional
+subscriber:
+  # For pull-based subscribers, kiwi is capable of maintaining internal buffers to
+  # handle backpressure. This setting controls the maximum number of events that may
+  # be buffered for a subscription. Once the capacity is reached, buffered events will
+  # be dropped in a LRU fashion.
+  # 
+  # If this option is not set, kiwi will drop events when a pull-based subscriber is 
+  # unable to keep up with its respective source result frequency.
+  ## Optional
+  buffer_capacity: 3
+
+  # The maximum number of events that a pull-based subscriber is permitted to
+  # lag behind the source before kiwi emits a lag notice. If not set, kiwi will
+  # not emit lag notices
+  ## Optional
+  lag_notice_threshold: 2
