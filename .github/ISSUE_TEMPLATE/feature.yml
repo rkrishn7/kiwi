@@ -1,0 +1,25 @@
+name: Feature Request
+description: Suggest an idea for kiwi
+title: "[Feature] "
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for taking the time to suggest a feature! 🌟"
+  - type: textarea
+    id: feature-request
+    attributes:
+      label: Feature Request
+      description: Detailed description of the feature you're proposing.
+      placeholder: "Please describe the feature you would like to see added..."
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation and Goals
+      description: Explain why this feature is important for the project and the goals it will achieve.
+      placeholder: "Explain why this feature is important..."
+    validations:
+      required: true
