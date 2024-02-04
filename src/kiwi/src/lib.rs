@@ -1,6 +1,6 @@
 pub mod config;
+pub mod connection;
 pub mod hook;
-pub mod ingest;
 pub mod protocol;
 pub mod source;
 pub mod subscription;

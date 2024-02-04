@@ -13,12 +13,11 @@ use crate::protocol::{Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId, SourceMessage, SourceResult};
 use crate::subscription::{Subscription, SubscriptionRecvError};
 
-/// This actor is responsible for the following tasks:
+/// An actor that is responsible for the following:
 /// - Processing commands as they become available
 /// - Reading events from subscribed sources, processing them, and
-///   forwarding them along its active subscriptions
-/// TODO: Rename to SubscriptionManager
-pub struct IngestActor<I> {
+///   forwarding them along to the connection it manages
+pub struct ConnectionManager<I> {
     /// Channel for receiving commands from the connection
     cmd_rx: UnboundedReceiver<Command>,
     /// Channel for sending messages to the connection
@@ -43,7 +42,7 @@ pub struct IngestActor<I> {
 /// it should next take. The states here are externally-driven, meaning external
 /// events cause state transitions. As a result, there is no starting state which
 /// may depart from the traditional concept of a state machine
-enum IngestActorState<T> {
+enum ConnectionManagerState<T> {
     /// A command has been received from the connection
     Command(Command),
     /// Results have been received from a source
@@ -52,7 +51,7 @@ enum IngestActorState<T> {
     Error((SourceId, SubscriptionRecvError)),
 }
 
-impl<I> IngestActor<I>
+impl<I> ConnectionManager<I>
 where
     I: Intercept + Clone + Send + 'static,
 {
@@ -96,7 +95,7 @@ where
 
                     maybe_cmd = self.cmd_rx.recv() => {
                         match maybe_cmd {
-                            Some(cmd) => IngestActorState::Command(cmd),
+                            Some(cmd) => ConnectionManagerState::Command(cmd),
                             // If the command rx hung up, it indicates the connection
                             // has been dropped so we can safely exit
                             None => break,
@@ -107,18 +106,18 @@ where
                     // handle later signals to add a new subscription via `cmd_tx`
                     Some((source_id, res)) = combined.next() => {
                         match res {
-                            Ok(results) => IngestActorState::SourceResults((source_id.clone(), results)),
-                            Err(err) => IngestActorState::Error((source_id.clone(), err)),
+                            Ok(results) => ConnectionManagerState::SourceResults((source_id.clone(), results)),
+                            Err(err) => ConnectionManagerState::Error((source_id.clone(), err)),
                         }
                     },
                 }
             };
 
             match next_state {
-                IngestActorState::Command(cmd) => {
+                ConnectionManagerState::Command(cmd) => {
                     self.handle_command(cmd).await?;
                 }
-                IngestActorState::SourceResults((source_id, results)) => {
+                ConnectionManagerState::SourceResults((source_id, results)) => {
                     for result in results {
                         let source_id = source_id.clone();
                         match result {
@@ -138,7 +137,7 @@ where
                         }
                     }
                 }
-                IngestActorState::Error((source_id, err)) => match err {
+                ConnectionManagerState::Error((source_id, err)) => match err {
                     SubscriptionRecvError::SubscriberLag(lag) => {
                         if let Some(threshold) = self.subscriber_config.lag_notice_threshold {
                             if lag >= threshold {
@@ -169,7 +168,7 @@ where
             }
         }
 
-        tracing::debug!(connection = ?self.connection_ctx, "Ingest actor completed normally");
+        tracing::debug!(connection = ?self.connection_ctx, "Connection manager completed normally");
 
         Ok(())
     }
@@ -423,7 +422,7 @@ mod tests {
 
         let sources = Arc::new(Mutex::new(sources));
 
-        let actor = IngestActor::new(
+        let actor = ConnectionManager::new(
             Arc::clone(&sources),
             cmd_rx,
             msg_tx,
@@ -567,10 +566,7 @@ mod tests {
         // Drop the command channel, which should cause the actor to complete
         drop(cmd_tx);
 
-        assert!(
-            actor_handle.await.unwrap().is_ok(),
-            "ingest actor should complete successfully when command channel is closed"
-        );
+        assert!(actor_handle.await.unwrap().is_ok());
     }
 
     #[tokio::test]

@@ -10,10 +10,10 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, 
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::WebSocketStream;
 
+use crate::connection::ConnectionManager;
 use crate::hook::authenticate::types::Outcome;
 use crate::hook::authenticate::Authenticate;
 use crate::hook::intercept::types::{AuthCtx, ConnectionCtx, WebSocketConnectionCtx};
-use crate::ingest::IngestActor;
 
 use crate::hook::intercept::Intercept;
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
@@ -132,7 +132,7 @@ where
     let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
-    let actor = IngestActor::new(
+    let actor = ConnectionManager::new(
         sources,
         cmd_rx,
         msg_tx,
