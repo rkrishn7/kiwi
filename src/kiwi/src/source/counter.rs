@@ -5,7 +5,7 @@ use tokio::sync::broadcast::{Receiver, Sender};
 
 use crate::hook;
 
-use super::{Source, SourceId, SourceMessage, SourceMetadata, SubscribeError};
+use super::{Source, SourceId, SourceMessage, SourceMetadata, SourceResult, SubscribeError};
 
 type ShutdownTrigger = tokio::sync::oneshot::Sender<()>;
 type ShutdownReceiver = tokio::sync::oneshot::Receiver<()>;
@@ -28,7 +28,6 @@ impl From<CounterSourceResult> for hook::intercept::types::CounterEventCtx {
 pub struct CounterSource {
     id: String,
     tx: Weak<Sender<SourceMessage>>,
-    task_handle: tokio::task::JoinHandle<()>,
     initial_subscription_tx: Option<tokio::sync::oneshot::Sender<()>>,
     _shutdown_trigger: ShutdownTrigger,
 }
@@ -65,13 +64,12 @@ impl CounterSource {
             shutdown_rx: shutdown_rx.fuse(),
         };
 
-        let handle = tokio::spawn(task.run());
+        tokio::spawn(task.run());
 
         Self {
             id,
             _shutdown_trigger: shutdown_trigger,
             tx: weak_tx,
-            task_handle: handle,
             initial_subscription_tx: Some(initial_subscription_tx),
         }
     }
@@ -79,18 +77,16 @@ impl CounterSource {
 
 impl Source for CounterSource {
     fn subscribe(&mut self) -> Result<Receiver<SourceMessage>, SubscribeError> {
-        if self.task_handle.is_finished() {
-            return Err(SubscribeError::FiniteSourceEnded);
-        }
-
         if let Some(tx) = self.initial_subscription_tx.take() {
             let _ = tx.send(());
         }
 
+        // If the counter task (our sole sender) has ended, it indicates that
+        // the source has ended
         if let Some(tx) = self.tx.upgrade() {
-            return Ok(tx.subscribe());
+            Ok(tx.subscribe())
         } else {
-            return Err(SubscribeError::FiniteSourceEnded);
+            Err(SubscribeError::FiniteSourceEnded)
         }
     }
 
@@ -134,7 +130,7 @@ impl CounterTask {
                         }
                     }
 
-                    let _ = self.tx.send(SourceMessage::Result(crate::source::SourceResult::Counter(CounterSourceResult {
+                    let _ = self.tx.send(SourceMessage::Result(SourceResult::Counter(CounterSourceResult {
                         source_id: self.source_id.clone(),
                         count: current,
                     })));
@@ -144,7 +140,7 @@ impl CounterTask {
             }
         }
 
-        tracing::debug!("Counter source {} shutting down", self.source_id);
+        tracing::debug!("Counter task for source {} shutting down", self.source_id);
     }
 }
 
@@ -156,4 +152,50 @@ pub fn build_source(
     lazy: bool,
 ) -> Box<dyn Source + Send + Sync + 'static> {
     Box::new(CounterSource::new(id, min, max, interval, lazy))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_subscribing_fails_after_source_ended() {
+        let mut source = CounterSource::new(
+            "test".into(),
+            0,
+            Some(3),
+            std::time::Duration::from_millis(5),
+            false,
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        assert!(matches!(
+            source.subscribe(),
+            Err(SubscribeError::FiniteSourceEnded)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_lazy_starts_after_first_subscription() {
+        let mut source = CounterSource::new(
+            "test".into(),
+            0,
+            Some(3),
+            std::time::Duration::from_millis(1),
+            true,
+        );
+
+        let mut rx = source.subscribe().unwrap();
+
+        let msg = rx.recv().await.unwrap();
+
+        assert!(matches!(
+            msg,
+            SourceMessage::Result(SourceResult::Counter(CounterSourceResult {
+                source_id,
+                count
+            })) if source_id == "test" && count == 0,
+        ));
+    }
 }
