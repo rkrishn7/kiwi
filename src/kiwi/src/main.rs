@@ -8,6 +8,7 @@ use clap::Parser;
 use kiwi::config::{Config, SourceType};
 use kiwi::hook::authenticate::wasm::WasmAuthenticateHook;
 use kiwi::hook::intercept::wasm::WasmInterceptHook;
+use kiwi::source::counter::build_source as build_counter_source;
 use kiwi::source::kafka::{build_source as build_kafka_source, start_partition_discovery};
 use kiwi::source::Source;
 use kiwi::source::SourceId;
@@ -41,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
     let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
 
-    for source in config.sources.iter() {
-        match source {
+    for source in config.sources.into_iter() {
+        let (source_id, source) = match source {
             SourceType::Kafka { topic } => {
                 if let Some(kafka_config) = config.kafka.as_ref() {
                     let source = build_kafka_source(
@@ -50,15 +51,43 @@ async fn main() -> anyhow::Result<()> {
                         &kafka_config.bootstrap_servers,
                         &kafka_config.group_id_prefix,
                     )?;
-                    sources
-                        .lock()
-                        .expect("poisoned lock")
-                        .insert(topic.clone(), source);
+
+                    (topic, source)
                 } else {
                     return Err(anyhow::anyhow!(
                         "Kafka source specified but no Kafka configuration found"
                     ));
                 }
+            }
+            SourceType::Counter {
+                id,
+                min,
+                max,
+                interval_ms,
+                lazy,
+            } => {
+                let source = build_counter_source(
+                    id.clone(),
+                    min,
+                    max,
+                    std::time::Duration::from_millis(interval_ms),
+                    lazy,
+                );
+
+                (id, source)
+            }
+        };
+
+        match sources
+            .lock()
+            .expect("poisoned lock")
+            .entry(source_id.clone())
+        {
+            std::collections::btree_map::Entry::Occupied(_) => {
+                panic!("Found duplicate source ID in configuration: {}", source_id);
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(source);
             }
         }
     }

@@ -182,19 +182,30 @@ where
                         error: "Source already has an active subscription".to_string(),
                     },
                     btree_map::Entry::Vacant(entry) => {
-                        let response = if let Some(source) =
-                            self.sources.lock().expect("poisoned lock").get(&source_id)
+                        let response = if let Some(source) = self
+                            .sources
+                            .lock()
+                            .expect("poisoned lock")
+                            .get_mut(&source_id)
                         {
-                            let source_stream = BroadcastStream::new(source.subscribe());
-                            let subscription = Subscription::from_mode(
-                                source_stream,
-                                mode,
-                                self.subscriber_config.buffer_capacity,
-                            );
+                            match source.subscribe() {
+                                Ok(rx) => {
+                                    let source_stream = BroadcastStream::new(rx);
+                                    let subscription = Subscription::from_mode(
+                                        source_stream,
+                                        mode,
+                                        self.subscriber_config.buffer_capacity,
+                                    );
 
-                            entry.insert(subscription);
+                                    entry.insert(subscription);
 
-                            CommandResponse::SubscribeOk { source_id }
+                                    CommandResponse::SubscribeOk { source_id }
+                                }
+                                Err(err) => CommandResponse::SubscribeError {
+                                    source_id,
+                                    error: err.to_string(),
+                                },
+                            }
                         } else {
                             CommandResponse::SubscribeError {
                                 source_id,
@@ -288,6 +299,9 @@ where
                     SourceResult::Kafka(ref mut kafka_event) => {
                         kafka_event.payload = payload;
                     }
+                    SourceResult::Counter(ref mut counter_event) => {
+                        counter_event.count = String::from_utf8(payload.unwrap())?.parse()?;
+                    }
                 }
 
                 Some(event)
@@ -311,7 +325,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::protocol;
-    use crate::source::{SourceMessage, SourceMetadata};
+    use crate::source::{SourceMessage, SourceMetadata, SubscribeError};
 
     use super::*;
     use std::time::Duration;
@@ -324,8 +338,8 @@ mod tests {
     }
 
     impl Source for TestSource {
-        fn subscribe(&self) -> Receiver<SourceMessage> {
-            self.tx.subscribe()
+        fn subscribe(&mut self) -> Result<Receiver<SourceMessage>, SubscribeError> {
+            Ok(self.tx.subscribe())
         }
 
         fn source_id(&self) -> &SourceId {

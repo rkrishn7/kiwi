@@ -17,6 +17,16 @@ impl From<types::EventCtx> for EventCtx {
     fn from(value: types::EventCtx) -> Self {
         match value {
             types::EventCtx::Kafka(ctx) => Self::Kafka(ctx.into()),
+            types::EventCtx::Counter(ctx) => Self::Counter(ctx.into()),
+        }
+    }
+}
+
+impl From<types::CounterEventCtx> for CounterEventCtx {
+    fn from(value: types::CounterEventCtx) -> Self {
+        Self {
+            source_id: value.source_id,
+            count: value.count,
         }
     }
 }

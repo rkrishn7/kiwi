@@ -39,6 +39,7 @@ pub struct WebSocketConnectionCtx {
 #[derive(Debug, Clone)]
 pub enum EventCtx {
     Kafka(KafkaEventCtx),
+    Counter(CounterEventCtx),
 }
 
 #[derive(Debug, Clone)]
@@ -48,4 +49,10 @@ pub struct KafkaEventCtx {
     pub(crate) timestamp: Option<i64>,
     pub(crate) partition: i32,
     pub(crate) offset: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CounterEventCtx {
+    pub(crate) source_id: String,
+    pub(crate) count: u64,
 }

@@ -12,6 +12,12 @@ hooks:
 sources:
   - topic: topic1
     type: kafka
+  - type: counter
+    id: counter1
+    interval_ms: 1000
+    lazy: true
+    min: 0
+    max: 10
 
 # Kafka configuration
 ## Required if any Kafka sources are defined, otherwise optional

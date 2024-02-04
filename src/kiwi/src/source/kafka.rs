@@ -20,7 +20,7 @@ use tokio::sync::{
 
 use crate::hook;
 
-use super::{Source, SourceId, SourceMessage, SourceMetadata, SourceResult};
+use super::{Source, SourceId, SourceMessage, SourceMetadata, SourceResult, SubscribeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KafkaSourceResult {
@@ -127,8 +127,8 @@ pub struct KafkaTopicSource {
 }
 
 impl Source for KafkaTopicSource {
-    fn subscribe(&self) -> Receiver<SourceMessage> {
-        self.tx.subscribe()
+    fn subscribe(&mut self) -> Result<Receiver<SourceMessage>, SubscribeError> {
+        Ok(self.tx.subscribe())
     }
 
     fn source_id(&self) -> &SourceId {
@@ -405,14 +405,6 @@ impl From<OwnedMessage> for KafkaSourceResult {
             timestamp: value.timestamp().to_millis(),
             partition: value.partition(),
             offset: value.offset(),
-        }
-    }
-}
-
-impl From<SourceResult> for hook::intercept::types::EventCtx {
-    fn from(value: SourceResult) -> Self {
-        match value {
-            SourceResult::Kafka(kafka_result) => Self::Kafka(kafka_result.into()),
         }
     }
 }
