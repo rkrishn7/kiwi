@@ -471,6 +471,7 @@ mod tests {
 
         let KafkaSourceResult { offset, .. } = match result {
             SourceResult::Kafka(result) => result,
+            SourceResult::Counter(_) => unreachable!(),
         };
 
         assert_eq!(offset, -1);

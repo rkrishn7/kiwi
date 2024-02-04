@@ -132,6 +132,13 @@ impl From<source::SourceResult> for SourceResult {
                     metadata: Some(metadata.to_string()),
                 }
             }
+            source::SourceResult::Counter(counter) => Self {
+                key: None,
+                payload: Some(counter.count.to_string().into_bytes()),
+                source_id: counter.source_id,
+                source_type: "counter".into(),
+                metadata: None,
+            },
         }
     }
 }

@@ -12,9 +12,15 @@ interface intercept-types {
 
     variant event-ctx {
         kafka(kafka-event-ctx),
+        counter(counter-event-ctx),
     }
 
     type event-payload = option<list<u8>>;
+
+    record counter-event-ctx {
+        source-id: string,
+        count: u64,
+    }
 
     record kafka-event-ctx {
         payload: event-payload,

@@ -17,7 +17,18 @@ pub struct Config {
 #[serde(tag = "type")]
 #[serde(rename_all = "lowercase")]
 pub enum SourceType {
-    Kafka { topic: String },
+    Kafka {
+        topic: String,
+    },
+    Counter {
+        id: String,
+        min: u64,
+        #[serde(default)]
+        max: Option<u64>,
+        interval_ms: u64,
+        #[serde(default)]
+        lazy: bool,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
