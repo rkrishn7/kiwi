@@ -1,20 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
 
-const WIT_INLINE: &str = concat!(
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../wit/world.wit")),
-    "\n",
-    include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../wit/intercept-types.wit"
-    )),
-    "\n",
-    include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../wit/authenticate-types.wit"
-    )),
-);
-
 #[proc_macro_attribute]
 pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = syn::parse_macro_input!(item as syn::ItemFn);
@@ -119,23 +105,16 @@ enum Hook {
 }
 
 fn preamble(hook: Hook) -> proc_macro2::TokenStream {
-    let export_decl = match hook {
-        Hook::Intercept => quote!(world: Kiwi),
+    let generated = match hook {
+        Hook::Intercept => include_str!("intercept_hook.rs"),
     };
-    let world = match hook {
-        Hook::Intercept => quote!("intercept-hook"),
-    };
+
+    let toks = syn::parse_str::<proc_macro2::TokenStream>(generated).expect("failed to parse wit-bindgen generated code");
 
     quote! {
         #![allow(missing_docs)]
-        ::kiwi_sdk::wit_bindgen::generate!({
-            world: #world,
-            inline: #WIT_INLINE,
-            runtime_path: "::kiwi_sdk::wit_bindgen::rt",
-            exports: {
-                #export_decl
-            }
-        });
+        #toks
+
         pub struct Kiwi;
     }
 }
