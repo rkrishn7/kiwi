@@ -136,14 +136,18 @@ where
         sources,
         cmd_rx,
         msg_tx,
-        connection_ctx,
+        connection_ctx.clone(),
         auth_ctx,
         intercept_hook,
         subscriber_config,
     );
 
     // Spawn the ingest actor. If it terminates, the connection should be closed
-    tokio::spawn(actor.run());
+    tokio::spawn(async move {
+        if let Err(err) = actor.run().await {
+            tracing::error!(connection = ?connection_ctx, "Connection manager terminated with error: {:?}", err);
+        }
+    });
 
     loop {
         // It's important that we bias the select block towards the WebSocket stream
