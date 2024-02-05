@@ -1,5 +1,5 @@
 [workspace]
-members = ["src/kiwi"]
+members = ["src/kiwi", "src/kiwi-sdk"]
 resolver = "2"
 
 [workspace.package]

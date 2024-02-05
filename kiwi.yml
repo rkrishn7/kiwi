@@ -2,7 +2,7 @@
 hooks:
   # This plugin executes once kiwi ingest's the source event, but before it decides whether to
   # forward the event to any of the source's subscribers. 
-  # intercept: ''
+  intercept: 'examples/hook/intercept.wasm'
 
   # This hook executes ...
   # authenticate: ''
@@ -17,7 +17,6 @@ sources:
     interval_ms: 1000
     lazy: true
     min: 0
-    max: 10
 
 # Kafka configuration
 ## Required if any Kafka sources are defined, otherwise optional

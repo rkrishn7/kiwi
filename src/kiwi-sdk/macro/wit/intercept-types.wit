@@ -1,0 +1,42 @@
+interface intercept-types {
+    // Plugin context
+    record context {
+        auth: option<list<u8>>,
+        connection: connection-ctx,
+        event: event-ctx,
+    }
+
+    variant connection-ctx {
+        websocket(websocket),
+    }
+
+    variant event-ctx {
+        kafka(kafka-event-ctx),
+        counter(counter-event-ctx),
+    }
+
+    type event-payload = option<list<u8>>;
+
+    record counter-event-ctx {
+        source-id: string,
+        count: u64,
+    }
+
+    record kafka-event-ctx {
+        payload: event-payload,
+        topic: string,
+        timestamp: option<u64>,
+        partition: u32,
+        offset: u64,
+    }
+
+    record websocket {
+        addr: option<string>,
+    }
+
+    variant action {
+        forward,
+        discard,
+        transform(event-payload),
+    }
+}
