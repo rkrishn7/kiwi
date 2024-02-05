@@ -6,7 +6,6 @@ pub enum Action {
 }
 
 #[derive(Debug, Clone)]
-/// Context needed to execute a plugin
 pub struct Context {
     pub auth: Option<AuthCtx>,
     pub connection: ConnectionCtx,
