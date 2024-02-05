@@ -3,10 +3,10 @@ mod bridge;
 
 use std::path::Path;
 
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::Store;
 use wasmtime::{Config, Engine};
-use wasmtime_wasi::preview2::{Table, WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder};
 
 use super::types::Outcome;
 use super::Authenticate;
@@ -21,18 +21,18 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 });
 
 struct State {
-    table: Table,
+    table: ResourceTable,
     wasi: WasiCtx,
 }
 
 impl bindgen::kiwi::kiwi::authenticate_types::Host for State {}
 
 impl wasmtime_wasi::preview2::WasiView for State {
-    fn table(&self) -> &wasmtime_wasi::preview2::Table {
+    fn table(&self) -> &wasmtime_wasi::preview2::ResourceTable {
         &self.table
     }
 
-    fn table_mut(&mut self) -> &mut wasmtime_wasi::preview2::Table {
+    fn table_mut(&mut self) -> &mut wasmtime_wasi::preview2::ResourceTable {
         &mut self.table
     }
 
@@ -71,7 +71,7 @@ impl Authenticate for WasmAuthenticateHook {
         let mut store = Store::new(
             &ENGINE,
             State {
-                table: Table::new(),
+                table: ResourceTable::new(),
                 wasi: builder.build(),
             },
         );
