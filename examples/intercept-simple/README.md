@@ -54,7 +54,7 @@ The Kiwi server is now running with the WASM hook loaded. To interact with it, l
 npm install -g wscat
 ```
 
-Awesome! Now we can interact with the Kiwi server at `http://localhost:8000`. Let's try it out by subscribing to a counter source and emitting some events. First, let's connect to the server using `wscat`:
+Awesome! Now we can interact with the Kiwi server at `ws://localhost:8000`. Let's try it out by subscribing to a counter source and emitting some events. First, let's connect to the server using `wscat`:
 
 ```sh
 wscat -c ws://127.0.0.1:8000
