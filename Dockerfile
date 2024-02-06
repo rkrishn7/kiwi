@@ -28,6 +28,10 @@ RUN apt-get update && \
     apt-get install -y libssl-dev ca-certificates cmake && \
     apt-get clean
 
+# Install the necessary WASI adapter module for the Kiwi hook runtime
+RUN curl https://github.com/bytecodealliance/wasmtime/releases/download/v17.0.0/wasi_snapshot_preview1.reactor.wasm \
+    -o /etc/kiwi/wasi/wasi_snapshot_preview1.wasm
+
 # Copy the binary from the builder stage
 COPY --from=builder /usr/src/kiwi/target/release/kiwi .
 

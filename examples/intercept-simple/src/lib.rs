@@ -1,7 +1,7 @@
-use kiwi_sdk::hook::intercept;
+use kiwi_sdk::hook;
 use kiwi_sdk::types::intercept::{Action, Context, CounterEventCtx, EventCtx};
 
-#[intercept]
+#[hook::intercept]
 fn handle(ctx: Context) -> Action {
     match ctx.event {
         EventCtx::Counter(CounterEventCtx {
