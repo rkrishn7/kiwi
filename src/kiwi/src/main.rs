@@ -21,7 +21,7 @@ use kiwi::source::SourceId;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the configuration file
-    #[arg(short, long, env, default_value_t = String::from("kiwi.yml"))]
+    #[arg(short, long, env, default_value_t = String::from("/etc/kiwi/config/kiwi.yml"))]
     pub config: String,
 
     /// Log level
@@ -104,19 +104,27 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let adapter_path = config
+        .hooks
+        .as_ref()
+        .and_then(|c| c.__adapter_path.as_ref());
+
     let intercept_hook = config
         .hooks
         .as_ref()
         .and_then(|hooks| hooks.intercept.clone())
         .map(|path| {
-            WasmInterceptHook::from_file(path).expect("failed to load intercept wasm hook")
+            WasmInterceptHook::from_file(path, adapter_path.cloned())
+                .expect("failed to load intercept wasm hook")
         });
 
     let authenticate_hook = config
         .hooks
-        .and_then(|hooks| hooks.authenticate)
+        .as_ref()
+        .and_then(|hooks| hooks.authenticate.clone())
         .map(|path| {
-            WasmAuthenticateHook::from_file(path).expect("failed to load authenticate wasm hook")
+            WasmAuthenticateHook::from_file(path, adapter_path.cloned())
+                .expect("failed to load authenticate wasm hook")
         });
 
     let listen_addr: SocketAddr = config.server.address.parse()?;

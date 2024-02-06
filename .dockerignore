@@ -1,4 +1,6 @@
-.editorconfig
-.gitignore
-kiwi.yml
+*
 
+!/src
+!/bin
+!Cargo.toml
+!Cargo.lock

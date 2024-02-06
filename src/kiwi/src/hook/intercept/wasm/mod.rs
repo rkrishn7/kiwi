@@ -1,6 +1,7 @@
 mod bindgen;
 mod bridge;
 
+use crate::hook::wasm::encode_component;
 use std::path::Path;
 
 use wasmtime::component::{Component, Linker, ResourceTable};
@@ -51,13 +52,15 @@ pub struct WasmInterceptHook {
 }
 
 impl WasmInterceptHook {
-    pub fn from_file(file: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
         let mut linker = Linker::new(&ENGINE);
         bindgen::InterceptHook::add_to_linker(&mut linker, |state: &mut State| state)?;
         wasmtime_wasi::preview2::command::sync::add_to_linker(&mut linker)?;
 
+        let bytes = encode_component(file, adapter)?;
+
         Ok(Self {
-            component: Component::from_file(&ENGINE, file)?,
+            component: Component::from_binary(&ENGINE, &bytes)?,
             linker,
         })
     }

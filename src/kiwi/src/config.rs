@@ -60,6 +60,7 @@ impl Kafka {
 pub struct Hooks {
     pub intercept: Option<String>,
     pub authenticate: Option<String>,
+    pub __adapter_path: Option<String>,
 }
 
 /// Server configuration
