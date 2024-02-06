@@ -1,0 +1,12 @@
+hooks:
+  intercept: '/etc/kiwi/hook/intercept.wasm'
+
+sources:
+  - type: counter
+    id: counter1
+    interval_ms: 1000
+    lazy: true
+    min: 0
+
+server:
+  address: '0.0.0.0:8000'

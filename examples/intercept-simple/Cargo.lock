@@ -36,13 +36,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hook"
-version = "0.0.0"
-dependencies = [
- "kiwi-sdk",
-]
-
-[[package]]
 name = "id-arena"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -57,6 +50,13 @@ dependencies = [
  "equivalent",
  "hashbrown",
  "serde",
+]
+
+[[package]]
+name = "intercept"
+version = "0.0.0"
+dependencies = [
+ "kiwi-sdk",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@ use kiwi::source::SourceId;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to the configuration file
-    #[arg(short, long, env, default_value_t = String::from("kiwi.yml"))]
+    #[arg(short, long, env, default_value_t = String::from("/etc/kiwi/config/kiwi.yml"))]
     pub config: String,
 
     /// Log level
