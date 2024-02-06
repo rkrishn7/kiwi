@@ -33,7 +33,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
             impl From<self::preamble::kiwi::kiwi::intercept_types::EventCtx> for ::kiwi_sdk::types::intercept::EventCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::EventCtx) -> Self {
                     match value {
@@ -42,7 +42,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
             impl From<self::preamble::kiwi::kiwi::intercept_types::CounterEventCtx> for ::kiwi_sdk::types::intercept::CounterEventCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::CounterEventCtx) -> Self {
                     Self {
@@ -51,7 +51,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
             impl From<self::preamble::kiwi::kiwi::intercept_types::KafkaEventCtx> for ::kiwi_sdk::types::intercept::KafkaEventCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::KafkaEventCtx) -> Self {
                     let timestamp: Option<i64> = value.timestamp.map(|t| t.try_into().expect("timestamp conversion must not fail"));
@@ -67,7 +67,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
             impl From<self::preamble::kiwi::kiwi::intercept_types::ConnectionCtx> for ::kiwi_sdk::types::intercept::ConnectionCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::ConnectionCtx) -> Self {
                     match value {
@@ -75,7 +75,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
             impl From<self::preamble::kiwi::kiwi::intercept_types::Websocket> for ::kiwi_sdk::types::intercept::WebSocketConnectionCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::Websocket) -> Self {
                     Self {
@@ -83,7 +83,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
             impl From<::kiwi_sdk::types::intercept::Action> for self::preamble::kiwi::kiwi::intercept_types::Action {
                 fn from(value: ::kiwi_sdk::types::intercept::Action) -> Self {
                     match value {
@@ -93,7 +93,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             }
-            
+
         }
     )
         .into()
@@ -109,7 +109,8 @@ fn preamble(hook: Hook) -> proc_macro2::TokenStream {
         Hook::Intercept => include_str!("intercept_hook.rs"),
     };
 
-    let toks = syn::parse_str::<proc_macro2::TokenStream>(generated).expect("failed to parse wit-bindgen generated code");
+    let toks = syn::parse_str::<proc_macro2::TokenStream>(generated)
+        .expect("failed to parse wit-bindgen generated code");
 
     quote! {
         #![allow(missing_docs)]
