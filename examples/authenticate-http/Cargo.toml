@@ -9,6 +9,7 @@ rust-version = "1.73.0"
 crate-type = ["cdylib"]
 
 [dependencies]
+anyhow = "1.0.79"
 kiwi-sdk = { path = "../../src/kiwi-sdk" }
 
 [workspace]

@@ -6,7 +6,7 @@ use std::path::Path;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::Store;
 use wasmtime::{Config, Engine};
-use wasmtime_wasi::preview2::{self, WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::preview2::{self, Stdout, WasiCtx, WasiCtxBuilder};
 use wasmtime_wasi_http::bindings::http::types::IncomingRequest;
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
@@ -88,11 +88,27 @@ impl Authenticate for WasmAuthenticateHook {
     async fn authenticate(&self, request: &HttpRequest<()>) -> anyhow::Result<Outcome> {
         let mut builder = WasiCtxBuilder::new();
 
+        builder.stdout(Stdout);
+        builder.allow_ip_name_lookup(false);
+        builder.allow_tcp(false);
+        builder.socket_addr_check(|_, _| false);
+
         let mut state = State {
             table: ResourceTable::new(),
             wasi: builder.build(),
             http: WasiHttpCtx,
         };
+
+        // state
+        //     .table()
+        //     .push(wasmtime_wasi_http::types::HostOutgoingRequest {
+        //         path_with_query: Some("/healthz".into()),
+        //         authority: Some("api.joinfound.com".into()),
+        //         method: wasmtime_wasi_http::bindings::http::types::Method::Get,
+        //         headers: wasmtime_wasi_http::types::FieldMap::new(),
+        //         scheme: Some(wasmtime_wasi_http::bindings::http::types::Scheme::Https),
+        //         body: None,
+        //     })?;
 
         let (parts, _) = request.clone().into_parts();
 
