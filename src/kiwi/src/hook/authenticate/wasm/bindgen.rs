@@ -1,6 +1,7 @@
 wasmtime::component::bindgen!({
     world: "authenticate-hook",
     path: "../wit",
+    async: true,
     with: {
         "wasi:io/error": wasmtime_wasi::preview2::bindings::io::error,
         "wasi:io/streams": wasmtime_wasi::preview2::bindings::io::streams,

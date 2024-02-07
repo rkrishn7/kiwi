@@ -6,7 +6,7 @@ use std::path::Path;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::Store;
 use wasmtime::{Config, Engine};
-use wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi::preview2::{self, WasiCtx, WasiCtxBuilder};
 use wasmtime_wasi_http::bindings::http::types::IncomingRequest;
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
@@ -21,6 +21,7 @@ use tokio_tungstenite::tungstenite::http::Request as HttpRequest;
 static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.async_support(true);
     Engine::new(&config).expect("failed to instantiate engine")
 });
 
@@ -69,7 +70,8 @@ pub struct WasmAuthenticateHook {
 impl WasmAuthenticateHook {
     pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
         let mut linker = Linker::new(&ENGINE);
-        wasmtime_wasi_http::proxy::add_to_linker(&mut linker)?;
+        preview2::command::add_to_linker(&mut linker)?;
+        wasmtime_wasi_http::proxy::add_only_http_to_linker(&mut linker)?;
         bindgen::AuthenticateHook::add_to_linker(&mut linker, |state: &mut State| state)?;
 
         let bytes = encode_component(file, adapter)?;
@@ -81,8 +83,9 @@ impl WasmAuthenticateHook {
     }
 }
 
+#[async_trait::async_trait]
 impl Authenticate for WasmAuthenticateHook {
-    fn authenticate(&self, request: &HttpRequest<()>) -> anyhow::Result<Outcome> {
+    async fn authenticate(&self, request: &HttpRequest<()>) -> anyhow::Result<Outcome> {
         let mut builder = WasiCtxBuilder::new();
 
         let mut state = State {
@@ -97,19 +100,13 @@ impl Authenticate for WasmAuthenticateHook {
 
         let resource = state.table().push(request)?;
 
-        let mut store = Store::new(
-            &ENGINE,
-            State {
-                table: ResourceTable::new(),
-                wasi: builder.build(),
-                http: WasiHttpCtx,
-            },
-        );
+        let mut store = Store::new(&ENGINE, state);
 
         let (bindings, _) =
-            bindgen::AuthenticateHook::instantiate(&mut store, &self.component, &self.linker)?;
+            bindgen::AuthenticateHook::instantiate_async(&mut store, &self.component, &self.linker)
+                .await?;
 
-        let res = bindings.call_authenticate(&mut store, resource)?;
+        let res = bindings.call_authenticate(&mut store, resource).await?;
 
         Ok(res.into())
     }

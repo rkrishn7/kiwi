@@ -108,12 +108,12 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
     quote!(
         #func
         mod __kiwi_authenticate {
-            mod preamble {
+            pub mod preamble {
                 #preamble
             }
 
             impl preamble::Guest for preamble::Kiwi {
-                fn authenticate(incoming: ::kiwi_sdk::types::http::IncomingRequest) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
+                fn authenticate(incoming: self::preamble::wasi::http::types::IncomingRequest) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
                     super::#func_name(incoming).into()
                 }
             }

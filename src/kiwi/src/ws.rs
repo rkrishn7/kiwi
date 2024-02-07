@@ -85,34 +85,35 @@ where
     A: Authenticate + Unpin + Send + Sync + 'static,
 {
     let mut auth_ctx = None;
+    let mut request = None;
     let ws_stream = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         |req: &Request, res: Response| {
-            if let Some(hook) = authenticate_hook {
-                let outcome = tokio::task::block_in_place(|| hook.authenticate(req));
-
-                match outcome {
-                    Ok(Outcome::Authenticate) => (),
-                    Ok(Outcome::WithContext(ctx)) => {
-                        auth_ctx = Some(AuthCtx::from_bytes(ctx));
-                    }
-                    outcome => {
-                        if outcome.is_err() {
-                            tracing::error!("Failed to run authentication hook");
-                        }
-
-                        let mut res = ErrorResponse::new(Some("Unauthorized".to_string()));
-                        *res.status_mut() = StatusCode::UNAUTHORIZED;
-                        return Err(res);
-                    }
-                }
-            }
-
+            request = Some(req.clone());
             Ok(res)
         },
         None,
     )
     .await?;
+
+    if let Some(hook) = authenticate_hook {
+        let outcome = hook.authenticate(&request.unwrap()).await;
+
+        match outcome {
+            Ok(Outcome::Authenticate) => (),
+            Ok(Outcome::WithContext(ctx)) => {
+                auth_ctx = Some(AuthCtx::from_bytes(ctx));
+            }
+            outcome => {
+                if outcome.is_err() {
+                    tracing::debug!("Error during authentication hook: {:?}", outcome);
+                    tracing::error!("Failed to run authentication hook");
+                }
+
+                return Err(anyhow::anyhow!("Unauthorized"));
+            }
+        }
+    }
 
     Ok((ws_stream, auth_ctx))
 }

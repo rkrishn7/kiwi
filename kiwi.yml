@@ -2,10 +2,8 @@
 hooks:
   # This plugin executes once kiwi ingest's the source event, but before it decides whether to
   # forward the event to any of the source's subscribers. 
-  intercept: 'examples/hook/target/wasm32-wasi/debug/hook.wasm'
-
-  # This hook executes ...
-  # authenticate: ''
+  intercept: 'examples/intercept-simple/target/wasm32-wasi/debug/intercept.wasm'
+  authenticate: 'examples/authenticate-http/target/wasm32-wasi/debug/authenticate_http.wasm'
 
   # This property should only be used for development purposes. For production
   # environments, the adapter module is loaded into the final Docker image.
