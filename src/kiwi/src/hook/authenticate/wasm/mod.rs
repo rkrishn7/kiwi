@@ -7,6 +7,8 @@ use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::Store;
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder};
+use wasmtime_wasi_http::bindings::http::types::IncomingRequest;
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use crate::hook::wasm::encode_component;
 
@@ -25,9 +27,20 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 struct State {
     table: ResourceTable,
     wasi: WasiCtx,
+    http: WasiHttpCtx,
 }
 
 impl bindgen::kiwi::kiwi::authenticate_types::Host for State {}
+
+impl wasmtime_wasi_http::WasiHttpView for State {
+    fn ctx(&mut self) -> &mut WasiHttpCtx {
+        &mut self.http
+    }
+
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
+}
 
 impl wasmtime_wasi::preview2::WasiView for State {
     fn table(&self) -> &wasmtime_wasi::preview2::ResourceTable {
@@ -56,8 +69,8 @@ pub struct WasmAuthenticateHook {
 impl WasmAuthenticateHook {
     pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
         let mut linker = Linker::new(&ENGINE);
+        wasmtime_wasi_http::proxy::add_to_linker(&mut linker)?;
         bindgen::AuthenticateHook::add_to_linker(&mut linker, |state: &mut State| state)?;
-        wasmtime_wasi::preview2::command::sync::add_to_linker(&mut linker)?;
 
         let bytes = encode_component(file, adapter)?;
 
@@ -72,18 +85,31 @@ impl Authenticate for WasmAuthenticateHook {
     fn authenticate(&self, request: &HttpRequest<()>) -> anyhow::Result<Outcome> {
         let mut builder = WasiCtxBuilder::new();
 
+        let mut state = State {
+            table: ResourceTable::new(),
+            wasi: builder.build(),
+            http: WasiHttpCtx,
+        };
+
+        let (parts, _) = request.clone().into_parts();
+
+        let request = IncomingRequest::new(&mut state, parts, None);
+
+        let resource = state.table().push(request)?;
+
         let mut store = Store::new(
             &ENGINE,
             State {
                 table: ResourceTable::new(),
                 wasi: builder.build(),
+                http: WasiHttpCtx,
             },
         );
 
         let (bindings, _) =
             bindgen::AuthenticateHook::instantiate(&mut store, &self.component, &self.linker)?;
 
-        let res = bindings.call_authenticate(&mut store, &request.into())?;
+        let res = bindings.call_authenticate(&mut store, resource)?;
 
         Ok(res.into())
     }

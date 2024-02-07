@@ -7,7 +7,16 @@ world intercept-hook {
 }
 
 world authenticate-hook {
-    use authenticate-types.{request, outcome};
+    use authenticate-types.{outcome};
+    use wasi:http/types@0.2.0-rc-2024-01-16.{incoming-request};
 
-    export authenticate: func(req: request) -> outcome;
+    import wasi:http/outgoing-handler@0.2.0-rc-2024-01-16;
+
+    export authenticate: func(incoming: incoming-request) -> outcome;
+}
+
+world internal {
+    use wasi:http/types@0.2.0-rc-2024-01-16.{incoming-request};
+
+    import wasi:http/outgoing-handler@0.2.0-rc-2024-01-16;
 }

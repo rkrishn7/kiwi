@@ -4,9 +4,4 @@ interface authenticate-types {
         reject,
         with-context(list<u8>),
     }
-
-    record request {
-        uri: string,
-        headers: list<tuple<string, list<u8>>>,
-    }
 }

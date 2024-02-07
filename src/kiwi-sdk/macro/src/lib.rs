@@ -99,14 +99,50 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
+#[proc_macro_attribute]
+pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func = syn::parse_macro_input!(item as syn::ItemFn);
+    let func_name = &func.sig.ident;
+    let preamble = preamble(Hook::Authenticate);
+
+    quote!(
+        #func
+        mod __kiwi_authenticate {
+            mod preamble {
+                #preamble
+            }
+
+            impl preamble::Guest for preamble::Kiwi {
+                fn authenticate(incoming: ::kiwi_sdk::types::http::IncomingRequest) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
+                    super::#func_name(incoming).into()
+                }
+            }
+
+            impl From<::kiwi_sdk::types::authenticate::Outcome> for self::preamble::kiwi::kiwi::authenticate_types::Outcome {
+                fn from(value: ::kiwi_sdk::types::authenticate::Outcome) -> Self {
+                    match value {
+                        ::kiwi_sdk::types::authenticate::Outcome::Authenticate => Self::Authenticate,
+                        ::kiwi_sdk::types::authenticate::Outcome::Reject => Self::Reject,
+                        ::kiwi_sdk::types::authenticate::Outcome::WithContext(payload) => Self::WithContext(payload),
+                    }
+                }
+            }
+
+        }
+    )
+        .into()
+}
+
 #[derive(Copy, Clone)]
 enum Hook {
     Intercept,
+    Authenticate,
 }
 
 fn preamble(hook: Hook) -> proc_macro2::TokenStream {
     let generated = match hook {
         Hook::Intercept => include_str!("intercept_hook.rs"),
+        Hook::Authenticate => include_str!("authenticate_hook.rs"),
     };
 
     let toks = syn::parse_str::<proc_macro2::TokenStream>(generated)
