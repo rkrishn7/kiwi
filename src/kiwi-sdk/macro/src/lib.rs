@@ -134,12 +134,13 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn use_wasi_http_types(_item: TokenStream) -> TokenStream {
-    "
-    use __kiwi_authenticate::preamble::wasi::http::types as http_types;
-    "
-    .parse()
-    .unwrap()
+pub fn use_wasi_http_types(item: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(item as syn::Ident);
+
+    quote! {
+        use __kiwi_authenticate::preamble::wasi::http::types as #name;
+    }
+    .into()
 }
 
 #[proc_macro]
@@ -154,7 +155,7 @@ pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
             path_with_query: &str,
             body: Option<&[u8]>,
             additional_headers: Option<&[(String, Vec<u8>)]>,
-        ) -> Result<::kiwi_sdk::types::http::Response> {
+        ) -> anyhow::Result<::kiwi_sdk::types::http::Response> {
             fn header_val(v: &str) -> Vec<u8> {
                 v.to_string().into_bytes()
             }
@@ -173,25 +174,25 @@ pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
 
             request
                 .set_method(&method)
-                .map_err(|()| anyhow!("failed to set method"))?;
+                .map_err(|()| anyhow::anyhow!("failed to set method"))?;
             request
                 .set_scheme(Some(&scheme))
-                .map_err(|()| anyhow!("failed to set scheme"))?;
+                .map_err(|()| anyhow::anyhow!("failed to set scheme"))?;
             request
                 .set_authority(Some(authority))
-                .map_err(|()| anyhow!("failed to set authority"))?;
+                .map_err(|()| anyhow::anyhow!("failed to set authority"))?;
             request
                 .set_path_with_query(Some(&path_with_query))
-                .map_err(|()| anyhow!("failed to set path_with_query"))?;
+                .map_err(|()| anyhow::anyhow!("failed to set path_with_query"))?;
 
             let outgoing_body = request
                 .body()
-                .map_err(|_| anyhow!("outgoing request write failed"))?;
+                .map_err(|_| anyhow::anyhow!("outgoing request write failed"))?;
 
             if let Some(mut buf) = body {
                 let request_body = outgoing_body
                     .write()
-                    .map_err(|_| anyhow!("outgoing request write failed"))?;
+                    .map_err(|_| anyhow::anyhow!("outgoing request write failed"))?;
 
                 let pollable = request_body.subscribe();
                 while !buf.is_empty() {
@@ -230,14 +231,14 @@ pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
             __kiwi_authenticate::preamble::wasi::http::types::OutgoingBody::finish(outgoing_body, None)?;
 
             let incoming_response = match future_response.get() {
-                Some(result) => result.map_err(|()| anyhow!("response already taken"))?,
+                Some(result) => result.map_err(|()| anyhow::anyhow!("response already taken"))?,
                 None => {
                     let pollable = future_response.subscribe();
                     pollable.block();
                     future_response
                         .get()
                         .expect("incoming response available")
-                        .map_err(|()| anyhow!("response already taken"))?
+                        .map_err(|()| anyhow::anyhow!("response already taken"))?
                 }
             }?;
 
@@ -251,7 +252,7 @@ pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
 
             let incoming_body = incoming_response
                 .consume()
-                .map_err(|()| anyhow!("incoming response has no body stream"))?;
+                .map_err(|()| anyhow::anyhow!("incoming response has no body stream"))?;
 
             drop(incoming_response);
 
@@ -265,7 +266,7 @@ pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
                 let mut body_chunk = match input_stream.read(1024 * 1024) {
                     Ok(c) => c,
                     Err(__kiwi_authenticate::preamble::wasi::io::streams::StreamError::Closed) => break,
-                    Err(e) => Err(anyhow!("input_stream read failed: {e:?}"))?,
+                    Err(e) => Err(anyhow::anyhow!("input_stream read failed: {e:?}"))?,
                 };
 
                 if !body_chunk.is_empty() {

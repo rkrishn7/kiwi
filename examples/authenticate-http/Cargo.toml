@@ -11,5 +11,6 @@ crate-type = ["cdylib"]
 [dependencies]
 anyhow = "1.0.79"
 kiwi-sdk = { path = "../../src/kiwi-sdk" }
+http = "1.0.0"
 
 [workspace]
