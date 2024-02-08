@@ -133,6 +133,156 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
+#[proc_macro]
+pub fn use_wasi_http_types(_item: TokenStream) -> TokenStream {
+    "
+    use __kiwi_authenticate::preamble::wasi::http::types as http_types;
+    "
+    .parse()
+    .unwrap()
+}
+
+#[proc_macro]
+pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(item as syn::Ident);
+
+    quote! {
+        fn #name(
+            method: __kiwi_authenticate::preamble::wasi::http::types::Method,
+            scheme: __kiwi_authenticate::preamble::wasi::http::types::Scheme,
+            authority: &str,
+            path_with_query: &str,
+            body: Option<&[u8]>,
+            additional_headers: Option<&[(String, Vec<u8>)]>,
+        ) -> Result<::kiwi_sdk::types::http::Response> {
+            fn header_val(v: &str) -> Vec<u8> {
+                v.to_string().into_bytes()
+            }
+            let headers = __kiwi_authenticate::preamble::wasi::http::types::Headers::from_list(
+                &[
+                    &[
+                        ("User-agent".to_string(), header_val("WASI-HTTP/0.0.1")),
+                        ("Content-type".to_string(), header_val("application/json")),
+                    ],
+                    additional_headers.unwrap_or(&[]),
+                ]
+                .concat(),
+            )?;
+
+            let request = __kiwi_authenticate::preamble::wasi::http::types::OutgoingRequest::new(headers);
+
+            request
+                .set_method(&method)
+                .map_err(|()| anyhow!("failed to set method"))?;
+            request
+                .set_scheme(Some(&scheme))
+                .map_err(|()| anyhow!("failed to set scheme"))?;
+            request
+                .set_authority(Some(authority))
+                .map_err(|()| anyhow!("failed to set authority"))?;
+            request
+                .set_path_with_query(Some(&path_with_query))
+                .map_err(|()| anyhow!("failed to set path_with_query"))?;
+
+            let outgoing_body = request
+                .body()
+                .map_err(|_| anyhow!("outgoing request write failed"))?;
+
+            if let Some(mut buf) = body {
+                let request_body = outgoing_body
+                    .write()
+                    .map_err(|_| anyhow!("outgoing request write failed"))?;
+
+                let pollable = request_body.subscribe();
+                while !buf.is_empty() {
+                    pollable.block();
+
+                    let permit = match request_body.check_write() {
+                        Ok(n) => n,
+                        Err(_) => anyhow::bail!("output stream error"),
+                    };
+
+                    let len = buf.len().min(permit as usize);
+                    let (chunk, rest) = buf.split_at(len);
+                    buf = rest;
+
+                    match request_body.write(chunk) {
+                        Err(_) => anyhow::bail!("output stream error"),
+                        _ => {}
+                    }
+                }
+
+                match request_body.flush() {
+                    Err(_) => anyhow::bail!("output stream error"),
+                    _ => {}
+                }
+
+                pollable.block();
+
+                match request_body.check_write() {
+                    Ok(_) => {}
+                    Err(_) => anyhow::bail!("output stream error"),
+                };
+            }
+
+            let future_response = __kiwi_authenticate::preamble::wasi::http::outgoing_handler::handle(request, None)?;
+
+            __kiwi_authenticate::preamble::wasi::http::types::OutgoingBody::finish(outgoing_body, None)?;
+
+            let incoming_response = match future_response.get() {
+                Some(result) => result.map_err(|()| anyhow!("response already taken"))?,
+                None => {
+                    let pollable = future_response.subscribe();
+                    pollable.block();
+                    future_response
+                        .get()
+                        .expect("incoming response available")
+                        .map_err(|()| anyhow!("response already taken"))?
+                }
+            }?;
+
+            drop(future_response);
+
+            let status = incoming_response.status();
+
+            let headers_handle = incoming_response.headers();
+            let headers = headers_handle.entries();
+            drop(headers_handle);
+
+            let incoming_body = incoming_response
+                .consume()
+                .map_err(|()| anyhow!("incoming response has no body stream"))?;
+
+            drop(incoming_response);
+
+            let input_stream = incoming_body.stream().unwrap();
+            let input_stream_pollable = input_stream.subscribe();
+
+            let mut body = Vec::new();
+            loop {
+                input_stream_pollable.block();
+
+                let mut body_chunk = match input_stream.read(1024 * 1024) {
+                    Ok(c) => c,
+                    Err(__kiwi_authenticate::preamble::wasi::io::streams::StreamError::Closed) => break,
+                    Err(e) => Err(anyhow!("input_stream read failed: {e:?}"))?,
+                };
+
+                if !body_chunk.is_empty() {
+                    body.append(&mut body_chunk);
+                }
+            }
+
+            Ok(::kiwi_sdk::types::http::Response {
+                status,
+                headers,
+                body,
+            })
+        }
+    }
+    .into()
+}
+
 #[derive(Copy, Clone)]
 enum Hook {
     Intercept,

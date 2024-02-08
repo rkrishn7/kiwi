@@ -3,15 +3,13 @@ pub mod hook {
     pub use kiwi_macro::intercept;
 }
 
-// #[doc(hidden)]
-// pub mod wit {
-//     #![allow(missing_docs)]
-//     wit_bindgen::generate!({
-//         world: "internal",
-//         runtime_path: "wit_bindgen::rt",
-//         path: "../wit",
-//     });
-// }
+pub mod wasi {
+    pub use kiwi_macro::use_wasi_http_types;
+
+    pub mod http {
+        pub use kiwi_macro::make_http_request_fn;
+    }
+}
 
 /// Re-export for macro use.
 #[doc(hidden)]
