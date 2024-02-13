@@ -49,8 +49,8 @@ fn handle(req: http_types::IncomingRequest) -> Outcome {
     match http_request(
         http_types::Method::Get,
         http_types::Scheme::Https,
-        "api.joinfound.com",
-        "/healthz",
+        "google.com",
+        "/",
         None,
         None,
     ) {
