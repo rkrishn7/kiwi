@@ -8,7 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::config::Subscriber as SubscriberConfig;
-use crate::hook::intercept::{self, Intercept};
+use crate::hook::intercept::{self, types::Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId, SourceMessage, SourceResult};
 use crate::subscription::{Subscription, SubscriptionRecvError};
@@ -285,7 +285,7 @@ where
         };
 
         let action = if let Some(plugin) = self.intercept.clone() {
-            tokio::task::spawn_blocking(move || plugin.intercept(&plugin_ctx)).await??
+            plugin.intercept(&plugin_ctx).await?
         } else {
             intercept::types::Action::Forward
         };
@@ -328,6 +328,7 @@ mod tests {
     use crate::source::{SourceMessage, SourceMetadata, SubscribeError};
 
     use super::*;
+    use async_trait::async_trait;
     use std::time::Duration;
     use tokio::sync::broadcast::{Receiver, Sender};
 
@@ -355,8 +356,9 @@ mod tests {
     /// Discards all events
     struct DiscardPlugin;
 
+    #[async_trait]
     impl Intercept for DiscardPlugin {
-        fn intercept(
+        async fn intercept(
             &self,
             _ctx: &intercept::types::Context,
         ) -> anyhow::Result<intercept::types::Action> {
@@ -650,8 +652,9 @@ mod tests {
         #[derive(Debug, Clone)]
         struct ForwardPlugin;
 
+        #[async_trait]
         impl Intercept for ForwardPlugin {
-            fn intercept(
+            async fn intercept(
                 &self,
                 _ctx: &intercept::types::Context,
             ) -> anyhow::Result<intercept::types::Action> {
@@ -693,8 +696,9 @@ mod tests {
         #[derive(Debug, Clone)]
         struct TransformPlugin;
 
+        #[async_trait]
         impl Intercept for TransformPlugin {
-            fn intercept(
+            async fn intercept(
                 &self,
                 _ctx: &intercept::types::Context,
             ) -> anyhow::Result<intercept::types::Action> {
@@ -856,12 +860,13 @@ mod tests {
 
         // The bottleneck for the actor is now this plugin. Since the actor calls it
         // synchronously, it can only process around 10 messages/sec
+        #[async_trait]
         impl Intercept for SlowPlugin {
-            fn intercept(
+            async fn intercept(
                 &self,
                 _ctx: &intercept::types::Context,
             ) -> anyhow::Result<intercept::types::Action> {
-                std::thread::sleep(Duration::from_millis(100));
+                tokio::time::sleep(Duration::from_millis(100)).await;
                 Ok(intercept::types::Action::Forward)
             }
         }

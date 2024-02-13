@@ -10,7 +10,7 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
-wit-bindgen = "0.16.0"
+wit-bindgen = "0.17.0"
 proc-macro2 = "1"
 quote = "1.0"
 syn = { version = "1.0", features = ["full"] }

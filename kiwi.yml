@@ -2,10 +2,8 @@
 hooks:
   # This plugin executes once kiwi ingest's the source event, but before it decides whether to
   # forward the event to any of the source's subscribers. 
-  intercept: 'examples/hook/target/wasm32-wasi/debug/hook.wasm'
-
-  # This hook executes ...
-  # authenticate: ''
+  intercept: 'examples/intercept-simple/target/wasm32-wasi/debug/intercept.wasm'
+  authenticate: 'examples/authenticate-http/target/wasm32-wasi/debug/authenticate_http.wasm'
 
   # This property should only be used for development purposes. For production
   # environments, the adapter module is loaded into the final Docker image.
@@ -14,28 +12,28 @@ hooks:
 # Source configuration
 ## Required
 sources:
-  - topic: topic1
-    type: kafka
+  # - topic: topic1
+  #   type: kafka
   - type: counter
     id: counter1
     interval_ms: 1000
     lazy: true
     min: 0
 
-# Kafka configuration
-## Required if any Kafka sources are defined, otherwise optional
-kafka:
-  # Whether to enable partition discovery. If enabled, kiwi will periodically
-  # query the Kafka cluster to discover new partitions.
-  ## Optional (default: true)
-  partition_discovery_enabled: true
-  # The interval at which to query the Kafka cluster to discover new partitions
-  ## Optional (default: 300000)
-  partition_discovery_interval_ms: 300000
-  # Bootstrap servers to connect to
-  ## Required
-  bootstrap_servers:
-    - 'localhost:9092'
+# # Kafka configuration
+# ## Required if any Kafka sources are defined, otherwise optional
+# kafka:
+#   # Whether to enable partition discovery. If enabled, kiwi will periodically
+#   # query the Kafka cluster to discover new partitions.
+#   ## Optional (default: true)
+#   partition_discovery_enabled: true
+#   # The interval at which to query the Kafka cluster to discover new partitions
+#   ## Optional (default: 300000)
+#   partition_discovery_interval_ms: 300000
+#   # Bootstrap servers to connect to
+#   ## Required
+#   bootstrap_servers:
+#     - 'localhost:9092'
 
 # WebSocket server configuration
 ## Required
