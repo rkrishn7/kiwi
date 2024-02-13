@@ -15,15 +15,14 @@ interface intercept-types {
         counter(counter-event-ctx),
     }
 
-    type event-payload = option<list<u8>>;
-
     record counter-event-ctx {
         source-id: string,
         count: u64,
     }
 
     record kafka-event-ctx {
-        payload: event-payload,
+        payload: option<list<u8>>,
+        source-id: string,
         topic: string,
         timestamp: option<u64>,
         partition: u32,
@@ -34,9 +33,14 @@ interface intercept-types {
         addr: option<string>,
     }
 
+    variant transformed-payload {
+        kafka(option<list<u8>>),
+        counter(u64),
+    }
+
     variant action {
         forward,
         discard,
-        transform(event-payload),
+        transform(transformed-payload),
     }
 }

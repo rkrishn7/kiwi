@@ -40,7 +40,9 @@ impl From<types::KafkaEventCtx> for KafkaEventCtx {
         let offset = try_conv_bail!(value.offset, "offset conversion must not fail");
         Self {
             payload: value.payload,
-            topic: value.topic,
+            topic: value.topic.clone(),
+            // TODO: When Kafka sources include a custom source ID, use it here
+            source_id: value.topic,
             timestamp,
             partition,
             offset,
@@ -69,7 +71,16 @@ impl From<Action> for types::Action {
         match value {
             Action::Forward => Self::Forward,
             Action::Discard => Self::Discard,
-            Action::Transform(payload) => Self::Transform(payload),
+            Action::Transform(transformed) => Self::Transform(transformed.into()),
+        }
+    }
+}
+
+impl From<TransformedPayload> for types::TransformedPayload {
+    fn from(value: TransformedPayload) -> Self {
+        match value {
+            TransformedPayload::Kafka(payload) => Self::Kafka(payload),
+            TransformedPayload::Counter(count) => Self::Counter(count),
         }
     }
 }

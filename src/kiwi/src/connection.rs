@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::config::Subscriber as SubscriberConfig;
+use crate::hook::intercept::types::TransformedPayload;
 use crate::hook::intercept::{self, types::Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId, SourceMessage, SourceResult};
@@ -295,12 +296,17 @@ where
             intercept::types::Action::Forward => Some(event),
             intercept::types::Action::Transform(payload) => {
                 // Update event with new payload
-                match event {
-                    SourceResult::Kafka(ref mut kafka_event) => {
+                match (&mut event, payload) {
+                    (SourceResult::Kafka(kafka_event), TransformedPayload::Kafka(payload)) => {
                         kafka_event.payload = payload;
                     }
-                    SourceResult::Counter(ref mut counter_event) => {
-                        counter_event.count = String::from_utf8(payload.unwrap())?.parse()?;
+                    (SourceResult::Counter(counter_event), TransformedPayload::Counter(count)) => {
+                        counter_event.count = count;
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Plugin returned a transformed payload that does not match the source result"
+                        ));
                     }
                 }
 
@@ -702,9 +708,11 @@ mod tests {
                 &self,
                 _ctx: &intercept::types::Context,
             ) -> anyhow::Result<intercept::types::Action> {
-                Ok(intercept::types::Action::Transform(Some(
-                    "hello".as_bytes().to_owned(),
-                )))
+                Ok(intercept::types::Action::Transform(
+                    intercept::types::TransformedPayload::Kafka(Some(
+                        "hello".as_bytes().to_owned(),
+                    )),
+                ))
             }
         }
 
