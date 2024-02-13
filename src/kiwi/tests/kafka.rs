@@ -130,14 +130,19 @@ server:
             let msg: Message = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
 
             match msg {
-                Message::Result(msg) => {
-                    assert_eq!(msg.source_id.as_ref(), "topic1".to_string());
-                    assert_eq!(
-                        std::str::from_utf8(&msg.payload.unwrap()).unwrap(),
-                        format!("Message {}", count)
-                    );
-                    count += 1;
-                }
+                Message::Result(msg) => match msg {
+                    kiwi::protocol::SourceResult::Kafka {
+                        source_id, payload, ..
+                    } => {
+                        assert_eq!(source_id.as_ref(), "topic1".to_string());
+                        assert_eq!(
+                            std::str::from_utf8(&payload.unwrap()).unwrap(),
+                            format!("Message {}", count)
+                        );
+                        count += 1;
+                    }
+                    _ => panic!("Expected Kafka message. Received {:?}", msg),
+                },
                 m => panic!("Expected message. Received {:?}", m),
             }
         }

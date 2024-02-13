@@ -726,11 +726,16 @@ mod tests {
                 let msg = msg_rx.recv().await.unwrap();
                 match msg {
                     Message::Result(m) => {
-                        assert_eq!(
-                            m.payload,
-                            Some("hello".as_bytes().to_owned()),
-                            "message payload should have been transformed"
-                        );
+                        match m {
+                            protocol::SourceResult::Kafka { payload, .. } => {
+                                assert_eq!(
+                                    payload,
+                                    Some("hello".as_bytes().to_owned()),
+                                    "message payload should have been transformed"
+                                );
+                            },
+                            _ => unreachable!(),
+                        }
                     }
                     _ => panic!("actor should forward message when transform action is returned from plugin"),
                 }

@@ -99,45 +99,48 @@ impl From<source::SourceResult> for Message {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SourceResult {
-    #[serde(with = "crate::util::serde::base64")]
-    /// Event key
-    pub key: Option<Vec<u8>>,
-    #[serde(with = "crate::util::serde::base64")]
-    /// base64 encoded event payload
-    pub payload: Option<Vec<u8>>,
-    /// Source ID this event was produced from
-    pub source_id: SourceId,
-    /// Type of source this event was produced from
-    pub source_type: String,
-    /// Source-specific metadata in JSON format
-    pub metadata: Option<String>,
+#[serde(tag = "sourceType", rename_all = "camelCase")]
+pub enum SourceResult {
+    #[serde(rename_all = "camelCase")]
+    Kafka {
+        #[serde(with = "crate::util::serde::base64")]
+        /// Event key
+        key: Option<Vec<u8>>,
+        #[serde(with = "crate::util::serde::base64")]
+        /// base64 encoded event payload
+        payload: Option<Vec<u8>>,
+        /// Source ID this event was produced from
+        source_id: SourceId,
+        /// Timestamp at which the message was produced
+        timestamp: Option<i64>,
+        /// Partition ID this event was produced from
+        partition: i32,
+        /// Offset at which the message was produced
+        offset: i64,
+    },
+    #[serde(rename_all = "camelCase")]
+    Counter {
+        /// Event count
+        count: u64,
+        /// Source ID this counter event was produced from
+        source_id: SourceId,
+    },
 }
 
 impl From<source::SourceResult> for SourceResult {
     fn from(value: source::SourceResult) -> Self {
         match value {
-            source::SourceResult::Kafka(kafka) => {
-                let metadata = serde_json::json!({
-                    "partition": kafka.partition,
-                    "offset": kafka.offset,
-                    "timestamp": kafka.timestamp,
-                });
-
-                Self {
-                    key: kafka.key,
-                    payload: kafka.payload,
-                    source_id: kafka.topic,
-                    source_type: "kafka".into(),
-                    metadata: Some(metadata.to_string()),
-                }
-            }
-            source::SourceResult::Counter(counter) => Self {
-                key: None,
-                payload: Some(counter.count.to_string().into_bytes()),
+            source::SourceResult::Kafka(kafka) => Self::Kafka {
+                key: kafka.key,
+                payload: kafka.payload,
+                source_id: kafka.topic,
+                partition: kafka.partition,
+                offset: kafka.offset,
+                timestamp: kafka.timestamp,
+            },
+            source::SourceResult::Counter(counter) => Self::Counter {
                 source_id: counter.source_id,
-                source_type: "counter".into(),
-                metadata: None,
+                count: counter.count,
             },
         }
     }
@@ -244,19 +247,20 @@ mod tests {
             r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","source":"test","message":"New partition added"}}"#
         );
 
-        let message = Message::Result(SourceResult {
+        let message = Message::Result(SourceResult::Kafka {
             payload: Some("test".into()),
             source_id: "test".into(),
-            source_type: "kafka".into(),
             key: None,
-            metadata: None,
+            timestamp: None,
+            partition: 0,
+            offset: 1,
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
         let encoded = base64::engine::general_purpose::STANDARD.encode("test".as_bytes());
         assert_eq!(
             serialized,
-            r#"{"type":"RESULT","data":{"key":null,"payload":"$encoded","source_id":"test","source_type":"kafka","metadata":null}}"#.replace("$encoded", encoded.as_str())
+            r#"{"type":"RESULT","data":{"sourceType":"kafka","key":null,"payload":"$encoded","sourceId":"test","timestamp":null,"partition":0,"offset":1}}"#.replace("$encoded", encoded.as_str())
         );
     }
 }
