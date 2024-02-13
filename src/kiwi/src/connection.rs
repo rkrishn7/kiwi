@@ -866,7 +866,7 @@ mod tests {
                 &self,
                 _ctx: &intercept::types::Context,
             ) -> anyhow::Result<intercept::types::Action> {
-                std::thread::sleep(Duration::from_millis(100));
+                tokio::time::sleep(Duration::from_millis(100)).await;
                 Ok(intercept::types::Action::Forward)
             }
         }
