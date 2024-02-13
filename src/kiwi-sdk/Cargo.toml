@@ -9,4 +9,4 @@ description = "The Kiwi SDK allows you to write pluggable modules that hook into
 
 [dependencies]
 kiwi-macro = { path = "./macro" }
-wit-bindgen = "0.16.0"
+wit-bindgen = "0.17.0"
