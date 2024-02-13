@@ -11,11 +11,11 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::connection::ConnectionManager;
+use crate::hook::authenticate::types::Authenticate;
 use crate::hook::authenticate::types::Outcome;
-use crate::hook::authenticate::Authenticate;
 use crate::hook::intercept::types::{AuthCtx, ConnectionCtx, WebSocketConnectionCtx};
 
-use crate::hook::intercept::Intercept;
+use crate::hook::intercept::types::Intercept;
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
 use crate::source::{Source, SourceId};
 
@@ -85,35 +85,47 @@ where
     A: Authenticate + Unpin + Send + Sync + 'static,
 {
     let mut auth_ctx = None;
-    let mut request = None;
+
+    let handle = tokio::runtime::Handle::current();
+
     let ws_stream = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         |req: &Request, res: Response| {
-            request = Some(req.clone());
+            let request = req.clone();
+
+            if let Some(hook) = authenticate_hook {
+                // The callback implemented by tokio-tungstenite is not async, which makes
+                // it difficult to invoke async code from within it. Ultimately, we need
+                // to block the current thread to run the async code. While it's not ideal,
+                // tokio provides `tokio::task::block_in_place` to handle this.
+                //
+                // The tokio-tungstenite issue is tracked [here](https://github.com/snapview/tokio-tungstenite/issues/159)
+                let outcome = tokio::task::block_in_place(move || {
+                    handle.block_on(async { hook.authenticate(request).await })
+                });
+
+                match outcome {
+                    Ok(Outcome::Authenticate) => (),
+                    Ok(Outcome::WithContext(ctx)) => {
+                        auth_ctx = Some(AuthCtx::from_bytes(ctx));
+                    }
+                    outcome => {
+                        if outcome.is_err() {
+                            tracing::error!("Failed to run authentication hook");
+                        }
+
+                        let mut res = ErrorResponse::new(Some("Unauthorized".to_string()));
+                        *res.status_mut() = StatusCode::UNAUTHORIZED;
+                        return Err(res);
+                    }
+                }
+            }
+
             Ok(res)
         },
         None,
     )
     .await?;
-
-    if let Some(hook) = authenticate_hook {
-        let outcome = hook.authenticate(&request.unwrap()).await;
-
-        match outcome {
-            Ok(Outcome::Authenticate) => (),
-            Ok(Outcome::WithContext(ctx)) => {
-                auth_ctx = Some(AuthCtx::from_bytes(ctx));
-            }
-            outcome => {
-                if outcome.is_err() {
-                    tracing::debug!("Error during authentication hook: {:?}", outcome);
-                    tracing::error!("Failed to run authentication hook");
-                }
-
-                return Err(anyhow::anyhow!("Unauthorized"));
-            }
-        }
-    }
 
     Ok((ws_stream, auth_ctx))
 }

@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 
+use async_trait::async_trait;
+
 #[derive(Debug, Clone)]
 pub enum Action {
     Forward,
@@ -55,4 +57,9 @@ pub struct KafkaEventCtx {
 pub struct CounterEventCtx {
     pub(crate) source_id: String,
     pub(crate) count: u64,
+}
+
+#[async_trait]
+pub trait Intercept {
+    async fn intercept(&self, context: &Context) -> anyhow::Result<Action>;
 }

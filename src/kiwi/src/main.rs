@@ -6,8 +6,7 @@ use std::sync::Mutex;
 use clap::Parser;
 
 use kiwi::config::{Config, SourceType};
-use kiwi::hook::authenticate::wasm::WasmAuthenticateHook;
-use kiwi::hook::intercept::wasm::WasmInterceptHook;
+use kiwi::hook::wasm::{WasmAuthenticateHook, WasmInterceptHook};
 use kiwi::source::counter::build_source as build_counter_source;
 use kiwi::source::kafka::{build_source as build_kafka_source, start_partition_discovery};
 use kiwi::source::Source;
