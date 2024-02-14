@@ -8,6 +8,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::config::Subscriber as SubscriberConfig;
+use crate::hook::intercept::types::TransformedPayload;
 use crate::hook::intercept::{self, types::Intercept};
 use crate::protocol::{Command, CommandResponse, Message, Notice};
 use crate::source::{Source, SourceId, SourceMessage, SourceResult};
@@ -128,7 +129,7 @@ where
                                 if self.subscriptions.remove(&source_id).is_some() {
                                     self.msg_tx.send(Message::Notice(
                                         Notice::SubscriptionClosed {
-                                            source: source_id,
+                                            source_id,
                                             message: Some(message),
                                         },
                                     ))?;
@@ -142,7 +143,7 @@ where
                         if let Some(threshold) = self.subscriber_config.lag_notice_threshold {
                             if lag >= threshold {
                                 self.msg_tx.send(Message::Notice(Notice::Lag {
-                                    source: source_id,
+                                    source_id,
                                     count: lag,
                                 }))?;
                             }
@@ -151,7 +152,7 @@ where
                     SubscriptionRecvError::ProcessLag(lag) => {
                         tracing::warn!(lag, source_id, connection = ?self.connection_ctx, "Receiver is lagging");
                         self.msg_tx.send(Message::Notice(Notice::Lag {
-                            source: source_id,
+                            source_id,
                             count: lag,
                         }))?;
                     }
@@ -159,7 +160,7 @@ where
                         if self.subscriptions.remove(&source_id).is_some() {
                             self.msg_tx
                                 .send(Message::Notice(Notice::SubscriptionClosed {
-                                    source: source_id,
+                                    source_id,
                                     message: Some("Source closed".to_string()),
                                 }))?;
                         }
@@ -295,12 +296,17 @@ where
             intercept::types::Action::Forward => Some(event),
             intercept::types::Action::Transform(payload) => {
                 // Update event with new payload
-                match event {
-                    SourceResult::Kafka(ref mut kafka_event) => {
+                match (&mut event, payload) {
+                    (SourceResult::Kafka(kafka_event), TransformedPayload::Kafka(payload)) => {
                         kafka_event.payload = payload;
                     }
-                    SourceResult::Counter(ref mut counter_event) => {
-                        counter_event.count = String::from_utf8(payload.unwrap())?.parse()?;
+                    (SourceResult::Counter(counter_event), TransformedPayload::Counter(count)) => {
+                        counter_event.count = count;
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Plugin returned a transformed payload that does not match the source result"
+                        ));
                     }
                 }
 
@@ -366,7 +372,7 @@ mod tests {
         }
     }
 
-    fn test_source_result() -> SourceResult {
+    fn test_kafka_source_result() -> SourceResult {
         SourceResult::Kafka(crate::source::kafka::KafkaSourceResult {
             key: None,
             payload: None,
@@ -374,6 +380,13 @@ mod tests {
             timestamp: None,
             partition: 0,
             offset: 0,
+        })
+    }
+
+    fn test_counter_source_result() -> SourceResult {
+        SourceResult::Counter(crate::source::counter::CounterSourceResult {
+            count: 0,
+            source_id: "test".to_string(),
         })
     }
 
@@ -509,8 +522,8 @@ mod tests {
         original_source_id: &str,
     ) {
         match rx.recv().await.unwrap() {
-            Message::Notice(Notice::SubscriptionClosed { source, .. }) => {
-                assert_eq!(source, original_source_id);
+            Message::Notice(Notice::SubscriptionClosed { source_id, .. }) => {
+                assert_eq!(source_id, original_source_id);
             }
             m => panic!(
                 "actor should respond with a subscription closed notice. Instead responded with {:?}",
@@ -521,8 +534,11 @@ mod tests {
 
     async fn recv_lag_notice(rx: &mut UnboundedReceiver<Message>, source_id: &str, lag: u64) {
         match rx.recv().await.unwrap() {
-            Message::Notice(Notice::Lag { source, count }) => {
-                assert_eq!(source, source_id);
+            Message::Notice(Notice::Lag {
+                source_id: received_id,
+                count,
+            }) => {
+                assert_eq!(received_id, source_id);
                 assert_eq!(count, lag);
             }
             m => panic!(
@@ -636,7 +652,7 @@ mod tests {
 
         for _ in 0..10 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -673,7 +689,7 @@ mod tests {
 
         for _ in 0..num_messages {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -692,7 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plugin_transform_action() {
+    async fn test_plugin_transform_action_kafka() {
         #[derive(Debug, Clone)]
         struct TransformPlugin;
 
@@ -702,9 +718,11 @@ mod tests {
                 &self,
                 _ctx: &intercept::types::Context,
             ) -> anyhow::Result<intercept::types::Action> {
-                Ok(intercept::types::Action::Transform(Some(
-                    "hello".as_bytes().to_owned(),
-                )))
+                Ok(intercept::types::Action::Transform(
+                    intercept::types::TransformedPayload::Kafka(Some(
+                        "hello".as_bytes().to_owned(),
+                    )),
+                ))
             }
         }
 
@@ -717,7 +735,7 @@ mod tests {
 
         for _ in 0..10 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -726,11 +744,16 @@ mod tests {
                 let msg = msg_rx.recv().await.unwrap();
                 match msg {
                     Message::Result(m) => {
-                        assert_eq!(
-                            m.payload,
-                            Some("hello".as_bytes().to_owned()),
-                            "message payload should have been transformed"
-                        );
+                        match m {
+                            protocol::SourceResult::Kafka { payload, .. } => {
+                                assert_eq!(
+                                    payload,
+                                    Some("hello".as_bytes().to_owned()),
+                                    "message payload should have been transformed"
+                                );
+                            },
+                            _ => unreachable!(),
+                        }
                     }
                     _ => panic!("actor should forward message when transform action is returned from plugin"),
                 }
@@ -739,6 +762,93 @@ mod tests {
         };
 
         assert!(received_all_messages, "actor should forward all messages");
+    }
+
+    #[tokio::test]
+    async fn test_plugin_transform_action_counter() {
+        #[derive(Debug, Clone)]
+        struct TransformPlugin;
+
+        #[async_trait]
+        impl Intercept for TransformPlugin {
+            async fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
+                Ok(intercept::types::Action::Transform(
+                    intercept::types::TransformedPayload::Counter(1),
+                ))
+            }
+        }
+
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor(Some(TransformPlugin), vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        for _ in 0..10 {
+            source_tx
+                .send(SourceMessage::Result(test_counter_source_result()))
+                .unwrap();
+        }
+
+        let received_all_messages = {
+            for _ in 0..10 {
+                let msg = msg_rx.recv().await.unwrap();
+                match msg {
+                    Message::Result(m) => {
+                        match m {
+                            protocol::SourceResult::Counter { count, .. } => {
+                                assert_eq!(
+                                    count,
+                                    1,
+                                    "message payload should have been transformed"
+                                );
+                            },
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => panic!("actor should forward message when transform action is returned from plugin"),
+                }
+            }
+            true
+        };
+
+        assert!(received_all_messages, "actor should forward all messages");
+    }
+
+    #[tokio::test]
+    async fn test_plugin_transform_action_invalid() {
+        #[derive(Debug, Clone)]
+        struct TransformPlugin;
+
+        #[async_trait]
+        impl Intercept for TransformPlugin {
+            async fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
+                Ok(intercept::types::Action::Transform(
+                    intercept::types::TransformedPayload::Counter(1),
+                ))
+            }
+        }
+
+        let (cmd_tx, mut msg_rx, source_tx, handle, _) =
+            spawn_actor(Some(TransformPlugin), vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        source_tx
+            .send(SourceMessage::Result(test_kafka_source_result()))
+            .unwrap();
+
+        // The actor should terminate with an error since the plugin returned an invalid transformed payload
+        assert!(handle.await.unwrap().is_err());
     }
 
     #[tokio::test]
@@ -794,7 +904,7 @@ mod tests {
 
         for _ in 0..2 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -834,7 +944,7 @@ mod tests {
 
         for _ in 0..13 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -884,7 +994,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
                 source_tx
-                    .send(SourceMessage::Result(test_source_result()))
+                    .send(SourceMessage::Result(test_kafka_source_result()))
                     .unwrap();
             }
         });
@@ -895,8 +1005,8 @@ mod tests {
         for _ in 0..20 {
             let msg = msg_rx.recv().await.unwrap();
 
-            if let Message::Notice(Notice::Lag { source, count }) = msg {
-                assert_eq!(source, "test");
+            if let Message::Notice(Notice::Lag { source_id, count }) = msg {
+                assert_eq!(source_id, "test");
                 assert!(count > 0);
                 lag_notice_received = true;
                 break;

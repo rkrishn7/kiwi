@@ -52,16 +52,25 @@ pub enum Command {
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CommandResponse {
+    /// The subscription was successful
     #[serde(rename_all = "camelCase")]
     SubscribeOk { source_id: SourceId },
+    /// The unsubscription was successful
     #[serde(rename_all = "camelCase")]
     UnsubscribeOk { source_id: SourceId },
+    /// An error occurred while attempting to subscribe
     #[serde(rename_all = "camelCase")]
     SubscribeError { source_id: SourceId, error: String },
+    /// An error occurred while attempting to unsubscribe
     #[serde(rename_all = "camelCase")]
     UnsubscribeError { source_id: SourceId, error: String },
+    /// The request operation was successful. The returned value
+    /// for `requests` is the total number of requests remaining.
+    /// This may be more than the number specified in the previous
+    /// request operation as each request operation is additive.
     #[serde(rename_all = "camelCase")]
     RequestOk { source_id: SourceId, requests: u64 },
+    /// An error occurred while attempting to request events
     #[serde(rename_all = "camelCase")]
     RequestError { source_id: SourceId, error: String },
 }
@@ -72,12 +81,15 @@ pub enum CommandResponse {
 /// An info or error message that may be pushed to a client. A notice, in many
 /// cases is not issued as a direct result of a command
 pub enum Notice {
-    Lag {
-        source: SourceId,
-        count: u64,
-    },
+    /// Indicates that the source has lagged behind by `count` events
+    #[serde(rename_all = "camelCase")]
+    Lag { source_id: SourceId, count: u64 },
+    /// Indicates that the subscription to the source has been closed.
+    /// This may be due to a few reasons, such as the source being removed,
+    /// the source closing, source metadata changing, or an error occurring.
+    #[serde(rename_all = "camelCase")]
     SubscriptionClosed {
-        source: SourceId,
+        source_id: SourceId,
         message: Option<String>,
     },
 }
@@ -99,45 +111,48 @@ impl From<source::SourceResult> for Message {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SourceResult {
-    #[serde(with = "crate::util::serde::base64")]
-    /// Event key
-    pub key: Option<Vec<u8>>,
-    #[serde(with = "crate::util::serde::base64")]
-    /// base64 encoded event payload
-    pub payload: Option<Vec<u8>>,
-    /// Source ID this event was produced from
-    pub source_id: SourceId,
-    /// Type of source this event was produced from
-    pub source_type: String,
-    /// Source-specific metadata in JSON format
-    pub metadata: Option<String>,
+#[serde(tag = "sourceType", rename_all = "camelCase")]
+pub enum SourceResult {
+    #[serde(rename_all = "camelCase")]
+    Kafka {
+        #[serde(with = "crate::util::serde::base64")]
+        /// Event key
+        key: Option<Vec<u8>>,
+        #[serde(with = "crate::util::serde::base64")]
+        /// base64 encoded event payload
+        payload: Option<Vec<u8>>,
+        /// Source ID this event was produced from
+        source_id: SourceId,
+        /// Timestamp at which the message was produced
+        timestamp: Option<i64>,
+        /// Partition ID this event was produced from
+        partition: i32,
+        /// Offset at which the message was produced
+        offset: i64,
+    },
+    #[serde(rename_all = "camelCase")]
+    Counter {
+        /// Source ID this counter event was produced from
+        source_id: SourceId,
+        /// Event count
+        count: u64,
+    },
 }
 
 impl From<source::SourceResult> for SourceResult {
     fn from(value: source::SourceResult) -> Self {
         match value {
-            source::SourceResult::Kafka(kafka) => {
-                let metadata = serde_json::json!({
-                    "partition": kafka.partition,
-                    "offset": kafka.offset,
-                    "timestamp": kafka.timestamp,
-                });
-
-                Self {
-                    key: kafka.key,
-                    payload: kafka.payload,
-                    source_id: kafka.topic,
-                    source_type: "kafka".into(),
-                    metadata: Some(metadata.to_string()),
-                }
-            }
-            source::SourceResult::Counter(counter) => Self {
-                key: None,
-                payload: Some(counter.count.to_string().into_bytes()),
+            source::SourceResult::Kafka(kafka) => Self::Kafka {
+                key: kafka.key,
+                payload: kafka.payload,
+                source_id: kafka.topic,
+                partition: kafka.partition,
+                offset: kafka.offset,
+                timestamp: kafka.timestamp,
+            },
+            source::SourceResult::Counter(counter) => Self::Counter {
                 source_id: counter.source_id,
-                source_type: "counter".into(),
-                metadata: None,
+                count: counter.count,
             },
         }
     }
@@ -223,40 +238,52 @@ mod tests {
         );
 
         let message: Message = Message::Notice(Notice::Lag {
-            source: "test".into(),
+            source_id: "test".into(),
             count: 1,
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized,
-            r#"{"type":"NOTICE","data":{"type":"LAG","source":"test","count":1}}"#
+            r#"{"type":"NOTICE","data":{"type":"LAG","sourceId":"test","count":1}}"#
         );
 
         let message: Message = Message::Notice(Notice::SubscriptionClosed {
-            source: "test".into(),
+            source_id: "test".into(),
             message: Some("New partition added".to_string()),
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized,
-            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","source":"test","message":"New partition added"}}"#
+            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","sourceId":"test","message":"New partition added"}}"#
         );
 
-        let message = Message::Result(SourceResult {
+        let message = Message::Result(SourceResult::Kafka {
             payload: Some("test".into()),
             source_id: "test".into(),
-            source_type: "kafka".into(),
             key: None,
-            metadata: None,
+            timestamp: None,
+            partition: 0,
+            offset: 1,
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
         let encoded = base64::engine::general_purpose::STANDARD.encode("test".as_bytes());
         assert_eq!(
             serialized,
-            r#"{"type":"RESULT","data":{"key":null,"payload":"$encoded","source_id":"test","source_type":"kafka","metadata":null}}"#.replace("$encoded", encoded.as_str())
+            r#"{"type":"RESULT","data":{"sourceType":"kafka","key":null,"payload":"$encoded","sourceId":"test","timestamp":null,"partition":0,"offset":1}}"#.replace("$encoded", encoded.as_str())
+        );
+
+        let message = Message::Result(SourceResult::Counter {
+            source_id: "test".into(),
+            count: 1,
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"RESULT","data":{"sourceType":"counter","sourceId":"test","count":1}}"#
         );
     }
 }

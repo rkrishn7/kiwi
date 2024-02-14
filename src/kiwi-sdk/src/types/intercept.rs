@@ -1,8 +1,14 @@
 #[derive(Debug, Clone)]
+pub enum TransformedPayload {
+    Kafka(Option<Vec<u8>>),
+    Counter(u64),
+}
+
+#[derive(Debug, Clone)]
 pub enum Action {
     Forward,
     Discard,
-    Transform(Option<Vec<u8>>),
+    Transform(TransformedPayload),
 }
 
 #[derive(Debug, Clone)]

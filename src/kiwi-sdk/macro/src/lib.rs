@@ -89,11 +89,19 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     match value {
                         ::kiwi_sdk::types::intercept::Action::Forward => Self::Forward,
                         ::kiwi_sdk::types::intercept::Action::Discard => Self::Discard,
-                        ::kiwi_sdk::types::intercept::Action::Transform(payload) => Self::Transform(payload),
+                        ::kiwi_sdk::types::intercept::Action::Transform(payload) => Self::Transform(payload.into()),
                     }
                 }
             }
 
+            impl From<::kiwi_sdk::types::intercept::TransformedPayload> for self::preamble::kiwi::kiwi::intercept_types::TransformedPayload {
+                fn from(value: ::kiwi_sdk::types::intercept::TransformedPayload) -> Self {
+                    match value {
+                        ::kiwi_sdk::types::intercept::TransformedPayload::Kafka(payload) => Self::Kafka(payload),
+                        ::kiwi_sdk::types::intercept::TransformedPayload::Counter(count) => Self::Counter(count),
+                    }
+                }
+            }
         }
     )
         .into()
