@@ -1,11 +1,19 @@
-# 🥝 Kiwi
+# 🥝 Kiwi - Seamless Real-Time Data Streaming
 
-[![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![CircleCI](https://dl.circleci.com/status-badge/img/gh/rkrishn7/kiwi/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/rkrishn7/kiwi/tree/main) [![codecov](https://codecov.io/gh/rkrishn7/kiwi/graph/badge.svg?token=G6QRFUHNM4)](https://codecov.io/gh/rkrishn7/kiwi) ![contributions](https://img.shields.io/badge/contributions-welcome-green)
+[![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![CircleCI](https://dl.circleci.com/status-badge/img/gh/rkrishn7/kiwi/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/rkrishn7/kiwi/tree/main) ![contributions](https://img.shields.io/badge/contributions-welcome-green)
 
-
-Kiwi is a WebSocket gateway for real-time event sources. It implements a simple protocol for clients to subscribe to configured sources, ensuring that they stay reactive and up-to-date with the latest data.
+Kiwi is an extensible WebSocket adapter for real-time data streaming. It implements a simple protocol for clients to subscribe to configured sources, ensuring that they stay reactive and up-to-date with the latest data.
 
 ***NOTE***: Kiwi is currently in active development and is not yet ready for production use.
+
+- [🥝 Kiwi - Seamless Real-Time Data Streaming](#-kiwi---seamless-real-time-data-streaming)
+  - [Features](#features)
+  - [Motivation](#motivation)
+  - [Getting Started](#getting-started)
+  - [Plugins](#plugins)
+  - [Protocol](#protocol)
+  - [Configuration](#configuration)
+  - [Considerations](#considerations)
 
 ## Features
 
@@ -25,8 +33,52 @@ While Kafka and technologies that build upon it serve as powerful platforms for 
 
 ## Getting Started
 
-TODO
+The easiest way to get started with Kiwi is with Docker! First, create a simple configuration file for Kiwi named `kiwi.yml`:
 
+```yaml
+sources:
+  # Counter sources are primarily used for testing and demonstration purposes
+  - id: "counter"
+    type: "counter"
+    interval_ms: 1000
+    lazy: true
+    min: 0
+
+server:
+  address: '0.0.0.0:8000'
+```
+
+Next, in the same directory as the `kiwi.yml` file, run the following command to start Kiwi:
+
+```sh
+docker run -p 8000:8000 -v $(pwd)/kiwi.yml:/etc/kiwi/config/kiwi.yml ghcr.io/rkrishn7/kiwi:main
+```
+
+Success! Kiwi is now running and ready to accept WebSocket connections on port 8000. You can start interacting with the server by using a WebSocket client utility of your choice (e.g. [wscat](https://www.npmjs.com/package/wscat)). 
+
+For more examples, please see the [examples](./examples) directory.
+
+## Plugins
+
+Kiwi supports WebAssembly (WASM) plugins which allows developers to define the behavior of event delivery and authorization according to the unique requirements of their applications.
+
+There are two types of plugins that Kiwi supports:
+
+- **Intercept**: Intercept plugins are invoked before an event is sent to a client. They are called with context about the current connection and event, and can be used to control how/when events are forwarded to downstream clients.
+  - For example, imagine you are writing a chat application and only want users to receive messages they are authorized to see. While the chat message source may emit messages for all conversations, an intercept plugin can be used to filter out messages that the user is not authorized to see.
+
+- **Authentication**: Authentication plugins are invoked when a client connects to the server. They are called with context about the current connection and can be used to authenticate the client, potentially rejecting the connection if the client is not authorized to connect.
+  - Authentication plugins allow users of Kiwi to enforce custom authentication logic, such as verifying JWT tokens or checking for specific user roles. Additionally, the plugin may return custom context for the connection which is passed downstream to the intercept plugin.
+
+For more information on writing and using plugins, please see the [plugin documentation](./doc/PLUGINS.md).
+
+## Protocol
+
+Details on the Kiwi protocol can be found in the [protocol documentation](./doc/PROTOCOL.md).
+
+## Configuration
+
+Details on configuring Kiwi can be found in the [configuration documentation](./doc/CONFIGURATION.md).
 
 ## Considerations
 
