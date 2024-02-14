@@ -129,7 +129,7 @@ where
                                 if self.subscriptions.remove(&source_id).is_some() {
                                     self.msg_tx.send(Message::Notice(
                                         Notice::SubscriptionClosed {
-                                            source: source_id,
+                                            source_id,
                                             message: Some(message),
                                         },
                                     ))?;
@@ -143,7 +143,7 @@ where
                         if let Some(threshold) = self.subscriber_config.lag_notice_threshold {
                             if lag >= threshold {
                                 self.msg_tx.send(Message::Notice(Notice::Lag {
-                                    source: source_id,
+                                    source_id,
                                     count: lag,
                                 }))?;
                             }
@@ -152,7 +152,7 @@ where
                     SubscriptionRecvError::ProcessLag(lag) => {
                         tracing::warn!(lag, source_id, connection = ?self.connection_ctx, "Receiver is lagging");
                         self.msg_tx.send(Message::Notice(Notice::Lag {
-                            source: source_id,
+                            source_id,
                             count: lag,
                         }))?;
                     }
@@ -160,7 +160,7 @@ where
                         if self.subscriptions.remove(&source_id).is_some() {
                             self.msg_tx
                                 .send(Message::Notice(Notice::SubscriptionClosed {
-                                    source: source_id,
+                                    source_id,
                                     message: Some("Source closed".to_string()),
                                 }))?;
                         }
@@ -522,8 +522,8 @@ mod tests {
         original_source_id: &str,
     ) {
         match rx.recv().await.unwrap() {
-            Message::Notice(Notice::SubscriptionClosed { source, .. }) => {
-                assert_eq!(source, original_source_id);
+            Message::Notice(Notice::SubscriptionClosed { source_id, .. }) => {
+                assert_eq!(source_id, original_source_id);
             }
             m => panic!(
                 "actor should respond with a subscription closed notice. Instead responded with {:?}",
@@ -534,8 +534,11 @@ mod tests {
 
     async fn recv_lag_notice(rx: &mut UnboundedReceiver<Message>, source_id: &str, lag: u64) {
         match rx.recv().await.unwrap() {
-            Message::Notice(Notice::Lag { source, count }) => {
-                assert_eq!(source, source_id);
+            Message::Notice(Notice::Lag {
+                source_id: received_id,
+                count,
+            }) => {
+                assert_eq!(received_id, source_id);
                 assert_eq!(count, lag);
             }
             m => panic!(
@@ -1002,8 +1005,8 @@ mod tests {
         for _ in 0..20 {
             let msg = msg_rx.recv().await.unwrap();
 
-            if let Message::Notice(Notice::Lag { source, count }) = msg {
-                assert_eq!(source, "test");
+            if let Message::Notice(Notice::Lag { source_id, count }) = msg {
+                assert_eq!(source_id, "test");
                 assert!(count > 0);
                 lag_notice_received = true;
                 break;

@@ -229,8 +229,11 @@ server:
     let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
 
     match resp {
-        Message::Notice(Notice::SubscriptionClosed { source, message: _ }) => {
-            assert_eq!(source, "topic1".to_string());
+        Message::Notice(Notice::SubscriptionClosed {
+            source_id,
+            message: _,
+        }) => {
+            assert_eq!(source_id, "topic1".to_string());
         }
         _ => panic!("Expected subscribe closed"),
     }

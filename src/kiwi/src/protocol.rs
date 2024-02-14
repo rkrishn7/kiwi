@@ -52,16 +52,25 @@ pub enum Command {
 #[serde(tag = "type")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CommandResponse {
+    /// The subscription was successful
     #[serde(rename_all = "camelCase")]
     SubscribeOk { source_id: SourceId },
+    /// The unsubscription was successful
     #[serde(rename_all = "camelCase")]
     UnsubscribeOk { source_id: SourceId },
+    /// An error occurred while attempting to subscribe
     #[serde(rename_all = "camelCase")]
     SubscribeError { source_id: SourceId, error: String },
+    /// An error occurred while attempting to unsubscribe
     #[serde(rename_all = "camelCase")]
     UnsubscribeError { source_id: SourceId, error: String },
+    /// The request operation was successful. The returned value
+    /// for `requests` is the total number of requests remaining.
+    /// This may be more than the number specified in the previous
+    /// request operation as each request operation is additive.
     #[serde(rename_all = "camelCase")]
     RequestOk { source_id: SourceId, requests: u64 },
+    /// An error occurred while attempting to request events
     #[serde(rename_all = "camelCase")]
     RequestError { source_id: SourceId, error: String },
 }
@@ -72,12 +81,15 @@ pub enum CommandResponse {
 /// An info or error message that may be pushed to a client. A notice, in many
 /// cases is not issued as a direct result of a command
 pub enum Notice {
-    Lag {
-        source: SourceId,
-        count: u64,
-    },
+    /// Indicates that the source has lagged behind by `count` events
+    #[serde(rename_all = "camelCase")]
+    Lag { source_id: SourceId, count: u64 },
+    /// Indicates that the subscription to the source has been closed.
+    /// This may be due to a few reasons, such as the source being removed,
+    /// the source closing, source metadata changing, or an error occurring.
+    #[serde(rename_all = "camelCase")]
     SubscriptionClosed {
-        source: SourceId,
+        source_id: SourceId,
         message: Option<String>,
     },
 }
@@ -226,25 +238,25 @@ mod tests {
         );
 
         let message: Message = Message::Notice(Notice::Lag {
-            source: "test".into(),
+            source_id: "test".into(),
             count: 1,
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized,
-            r#"{"type":"NOTICE","data":{"type":"LAG","source":"test","count":1}}"#
+            r#"{"type":"NOTICE","data":{"type":"LAG","sourceId":"test","count":1}}"#
         );
 
         let message: Message = Message::Notice(Notice::SubscriptionClosed {
-            source: "test".into(),
+            source_id: "test".into(),
             message: Some("New partition added".to_string()),
         });
 
         let serialized = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized,
-            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","source":"test","message":"New partition added"}}"#
+            r#"{"type":"NOTICE","data":{"type":"SUBSCRIPTION_CLOSED","sourceId":"test","message":"New partition added"}}"#
         );
 
         let message = Message::Result(SourceResult::Kafka {
