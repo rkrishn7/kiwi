@@ -120,10 +120,10 @@ pub enum SourceResult {
     },
     #[serde(rename_all = "camelCase")]
     Counter {
-        /// Event count
-        count: u64,
         /// Source ID this counter event was produced from
         source_id: SourceId,
+        /// Event count
+        count: u64,
     },
 }
 
@@ -261,6 +261,17 @@ mod tests {
         assert_eq!(
             serialized,
             r#"{"type":"RESULT","data":{"sourceType":"kafka","key":null,"payload":"$encoded","sourceId":"test","timestamp":null,"partition":0,"offset":1}}"#.replace("$encoded", encoded.as_str())
+        );
+
+        let message = Message::Result(SourceResult::Counter {
+            source_id: "test".into(),
+            count: 1,
+        });
+
+        let serialized = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"type":"RESULT","data":{"sourceType":"counter","sourceId":"test","count":1}}"#
         );
     }
 }

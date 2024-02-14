@@ -372,7 +372,7 @@ mod tests {
         }
     }
 
-    fn test_source_result() -> SourceResult {
+    fn test_kafka_source_result() -> SourceResult {
         SourceResult::Kafka(crate::source::kafka::KafkaSourceResult {
             key: None,
             payload: None,
@@ -380,6 +380,13 @@ mod tests {
             timestamp: None,
             partition: 0,
             offset: 0,
+        })
+    }
+
+    fn test_counter_source_result() -> SourceResult {
+        SourceResult::Counter(crate::source::counter::CounterSourceResult {
+            count: 0,
+            source_id: "test".to_string(),
         })
     }
 
@@ -642,7 +649,7 @@ mod tests {
 
         for _ in 0..10 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -679,7 +686,7 @@ mod tests {
 
         for _ in 0..num_messages {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -698,7 +705,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plugin_transform_action() {
+    async fn test_plugin_transform_action_kafka() {
         #[derive(Debug, Clone)]
         struct TransformPlugin;
 
@@ -725,7 +732,7 @@ mod tests {
 
         for _ in 0..10 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -752,6 +759,93 @@ mod tests {
         };
 
         assert!(received_all_messages, "actor should forward all messages");
+    }
+
+    #[tokio::test]
+    async fn test_plugin_transform_action_counter() {
+        #[derive(Debug, Clone)]
+        struct TransformPlugin;
+
+        #[async_trait]
+        impl Intercept for TransformPlugin {
+            async fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
+                Ok(intercept::types::Action::Transform(
+                    intercept::types::TransformedPayload::Counter(1),
+                ))
+            }
+        }
+
+        let (cmd_tx, mut msg_rx, source_tx, _, _) =
+            spawn_actor(Some(TransformPlugin), vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        for _ in 0..10 {
+            source_tx
+                .send(SourceMessage::Result(test_counter_source_result()))
+                .unwrap();
+        }
+
+        let received_all_messages = {
+            for _ in 0..10 {
+                let msg = msg_rx.recv().await.unwrap();
+                match msg {
+                    Message::Result(m) => {
+                        match m {
+                            protocol::SourceResult::Counter { count, .. } => {
+                                assert_eq!(
+                                    count,
+                                    1,
+                                    "message payload should have been transformed"
+                                );
+                            },
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => panic!("actor should forward message when transform action is returned from plugin"),
+                }
+            }
+            true
+        };
+
+        assert!(received_all_messages, "actor should forward all messages");
+    }
+
+    #[tokio::test]
+    async fn test_plugin_transform_action_invalid() {
+        #[derive(Debug, Clone)]
+        struct TransformPlugin;
+
+        #[async_trait]
+        impl Intercept for TransformPlugin {
+            async fn intercept(
+                &self,
+                _ctx: &intercept::types::Context,
+            ) -> anyhow::Result<intercept::types::Action> {
+                Ok(intercept::types::Action::Transform(
+                    intercept::types::TransformedPayload::Counter(1),
+                ))
+            }
+        }
+
+        let (cmd_tx, mut msg_rx, source_tx, handle, _) =
+            spawn_actor(Some(TransformPlugin), vec!["test".to_string()], 100, None);
+
+        send_subscribe_cmd(&cmd_tx, "test", Some(protocol::SubscriptionMode::Push));
+
+        recv_subscribe_ok(&mut msg_rx, "test").await;
+
+        source_tx
+            .send(SourceMessage::Result(test_kafka_source_result()))
+            .unwrap();
+
+        // The actor should terminate with an error since the plugin returned an invalid transformed payload
+        assert!(handle.await.unwrap().is_err());
     }
 
     #[tokio::test]
@@ -807,7 +901,7 @@ mod tests {
 
         for _ in 0..2 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -847,7 +941,7 @@ mod tests {
 
         for _ in 0..13 {
             source_tx
-                .send(SourceMessage::Result(test_source_result()))
+                .send(SourceMessage::Result(test_kafka_source_result()))
                 .unwrap();
         }
 
@@ -897,7 +991,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
                 source_tx
-                    .send(SourceMessage::Result(test_source_result()))
+                    .send(SourceMessage::Result(test_kafka_source_result()))
                     .unwrap();
             }
         });
