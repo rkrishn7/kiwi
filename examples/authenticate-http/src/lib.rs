@@ -1,9 +1,7 @@
 use kiwi_sdk::hook;
+use kiwi_sdk::http::request as http_request;
 use kiwi_sdk::types::authenticate::Outcome;
-use kiwi_sdk::wasi;
-
-wasi::use_wasi_http_types!(http_types);
-wasi::http::make_http_request_fn!(http_request);
+use kiwi_sdk::types::http as http_types;
 
 #[hook::authenticate]
 fn handle(req: http_types::IncomingRequest) -> Outcome {
@@ -55,7 +53,7 @@ fn handle(req: http_types::IncomingRequest) -> Outcome {
         None,
     ) {
         Ok(res) => {
-            if std::str::from_utf8(&res.body).unwrap() == "OK" {
+            if res.status == 301 {
                 Outcome::Authenticate
             } else {
                 Outcome::Reject

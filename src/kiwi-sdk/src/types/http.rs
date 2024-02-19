@@ -24,3 +24,5 @@ impl Response {
             .find_map(|(k, v)| if k == name { Some(v) } else { None })
     }
 }
+
+pub use crate::wit::wasi::http::types::*;

@@ -183,7 +183,9 @@ impl Authenticate for WasmAuthenticateHook {
         )
         .await?;
 
-        let res = bindings.call_authenticate(&mut store, resource).await?;
+        let res = bindings
+            .call_authenticate(&mut store, resource.rep())
+            .await?;
 
         Ok(res.into())
     }

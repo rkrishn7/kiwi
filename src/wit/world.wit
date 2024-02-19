@@ -8,11 +8,10 @@ world intercept-hook {
 
 world authenticate-hook {
     use authenticate-types.{outcome};
-    use wasi:http/types@0.2.0.{incoming-request};
 
     import wasi:http/outgoing-handler@0.2.0;
 
-    export authenticate: func(incoming: incoming-request) -> outcome;
+    export authenticate: func(incoming: u32) -> outcome;
 }
 
 world internal {
