@@ -54,7 +54,7 @@ pub mod http {
             .set_authority(Some(authority))
             .map_err(|()| anyhow::anyhow!("failed to set authority"))?;
         request
-            .set_path_with_query(Some(&path_with_query))
+            .set_path_with_query(Some(path_with_query))
             .map_err(|()| anyhow::anyhow!("failed to set path_with_query"))?;
 
         let outgoing_body = request
@@ -79,15 +79,13 @@ pub mod http {
                 let (chunk, rest) = buf.split_at(len);
                 buf = rest;
 
-                match request_body.write(chunk) {
-                    Err(_) => anyhow::bail!("output stream error"),
-                    _ => {}
+                if request_body.write(chunk).is_err() {
+                    anyhow::bail!("output stream error");
                 }
             }
 
-            match request_body.flush() {
-                Err(_) => anyhow::bail!("output stream error"),
-                _ => {}
+            if request_body.flush().is_err() {
+                anyhow::bail!("output stream error");
             }
 
             pollable.block();
