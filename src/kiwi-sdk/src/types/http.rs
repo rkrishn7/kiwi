@@ -25,4 +25,12 @@ impl Response {
     }
 }
 
+pub struct Request {
+    pub method: Method,
+    pub path_with_query: Option<String>,
+    pub scheme: Option<Scheme>,
+    pub authority: Option<String>,
+    pub headers: Vec<(String, Vec<u8>)>,
+}
+
 pub use crate::wit::wasi::http::types::*;

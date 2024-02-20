@@ -1,7 +1,37 @@
 interface authenticate-types {
+    use wasi:http/types@0.2.0.{method, scheme, field-key, field-value};
+
     variant outcome {
         authenticate,
         reject,
         with-context(list<u8>),
     }
+
+    // This is the object form of the resource `wasi:http/types@0.2.0.{incoming-request}`.
+    // Curently, it's duplicated due to the lack of support for including re-mapped types
+    // in exported functions arguments, via `--with`. The issue is tracked 
+    // [here](https://github.com/bytecodealliance/wit-bindgen/issues/832).
+    //
+    // Until the issue is resolved, we have to duplicate the type here, and massage it to be
+    // compatible with the `Request` type in the kiwi-sdk.
+    //
+    // NOTE: Resolving this workaround will likely require a new major version of the SDK to be
+    // released, as it will be a breaking change unless we can guarantee API compatibility between
+    // the two types.
+    record http-request {
+        /// Returns the method of the incoming request.
+        method: method,
+    
+        /// Returns the path with query parameters from the request, as a string.
+        path-with-query: option<string>,
+    
+        /// Returns the protocol scheme from the request.
+        scheme: option<scheme>,
+    
+        /// Returns the authority from the request, if it was present.
+        authority: option<string>,
+    
+        /// Get the `headers` associated with the request.
+        headers: list<tuple<field-key, field-value>>,
+      }
 }

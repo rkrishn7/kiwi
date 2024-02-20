@@ -13,10 +13,6 @@ pub mod wit {
     });
 }
 
-#[cfg(target_arch = "wasm32")]
-#[doc(hidden)]
-pub use wit::__link_section;
-
 /// Re-export for macro use.
 #[doc(hidden)]
 pub use wit_bindgen;

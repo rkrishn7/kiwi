@@ -116,13 +116,13 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
     quote!(
         #func
         mod __kiwi_authenticate {
-            pub mod preamble {
+            mod preamble {
                 #preamble
             }
 
             impl preamble::Guest for preamble::Kiwi {
-                fn authenticate(incoming: u32) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
-                    super::#func_name(unsafe { ::kiwi_sdk::types::http::IncomingRequest::from_handle(incoming) }).into()
+                fn authenticate(incoming: self::preamble::kiwi::kiwi::authenticate_types::HttpRequest) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
+                    super::#func_name(incoming.into()).into()
                 }
             }
 
@@ -136,6 +136,17 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
+            impl From<self::preamble::kiwi::kiwi::authenticate_types::HttpRequest> for ::kiwi_sdk::types::http::Request {
+                fn from(value: self::preamble::kiwi::kiwi::authenticate_types::HttpRequest) -> Self {
+                    Self {
+                        method: value.method,
+                        path_with_query: value.path_with_query,
+                        scheme: value.scheme,
+                        authority: value.authority,
+                        headers: value.headers,
+                    }
+                }
+            }
         }
     )
         .into()

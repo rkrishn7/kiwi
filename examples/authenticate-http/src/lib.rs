@@ -4,8 +4,8 @@ use kiwi_sdk::types::authenticate::Outcome;
 use kiwi_sdk::types::http as http_types;
 
 #[hook::authenticate]
-fn handle(req: http_types::IncomingRequest) -> Outcome {
-    let path_with_query = if let Some(path_with_query) = req.path_with_query() {
+fn handle(req: http_types::Request) -> Outcome {
+    let path_with_query = if let Some(path_with_query) = req.path_with_query {
         path_with_query
     } else {
         return Outcome::Reject;
