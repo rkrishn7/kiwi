@@ -20,11 +20,11 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<self::preamble::kiwi::kiwi::intercept_types::Context> for ::kiwi_sdk::types::intercept::Context {
+            impl From<self::preamble::kiwi::kiwi::intercept_types::Context> for ::kiwi_sdk::hook::intercept::Context {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::Context) -> Self {
                     Self {
                         auth: value.auth.map(|raw| {
-                            ::kiwi_sdk::types::intercept::AuthCtx {
+                            ::kiwi_sdk::hook::intercept::AuthCtx {
                                 raw,
                             }
                         }),
@@ -34,7 +34,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<self::preamble::kiwi::kiwi::intercept_types::EventCtx> for ::kiwi_sdk::types::intercept::EventCtx {
+            impl From<self::preamble::kiwi::kiwi::intercept_types::EventCtx> for ::kiwi_sdk::hook::intercept::EventCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::EventCtx) -> Self {
                     match value {
                         self::preamble::kiwi::kiwi::intercept_types::EventCtx::Kafka(ctx) => Self::Kafka(ctx.into()),
@@ -43,7 +43,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<self::preamble::kiwi::kiwi::intercept_types::CounterEventCtx> for ::kiwi_sdk::types::intercept::CounterEventCtx {
+            impl From<self::preamble::kiwi::kiwi::intercept_types::CounterEventCtx> for ::kiwi_sdk::hook::intercept::CounterEventCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::CounterEventCtx) -> Self {
                     Self {
                         source_id: value.source_id,
@@ -52,7 +52,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<self::preamble::kiwi::kiwi::intercept_types::KafkaEventCtx> for ::kiwi_sdk::types::intercept::KafkaEventCtx {
+            impl From<self::preamble::kiwi::kiwi::intercept_types::KafkaEventCtx> for ::kiwi_sdk::hook::intercept::KafkaEventCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::KafkaEventCtx) -> Self {
                     let timestamp: Option<i64> = value.timestamp.map(|t| t.try_into().expect("timestamp conversion must not fail"));
                     let partition: i32 = value.partition.try_into().expect("partition conversion must not fail");
@@ -68,7 +68,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<self::preamble::kiwi::kiwi::intercept_types::ConnectionCtx> for ::kiwi_sdk::types::intercept::ConnectionCtx {
+            impl From<self::preamble::kiwi::kiwi::intercept_types::ConnectionCtx> for ::kiwi_sdk::hook::intercept::ConnectionCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::ConnectionCtx) -> Self {
                     match value {
                         self::preamble::kiwi::kiwi::intercept_types::ConnectionCtx::Websocket(ctx) => Self::WebSocket(ctx.into()),
@@ -76,7 +76,7 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<self::preamble::kiwi::kiwi::intercept_types::Websocket> for ::kiwi_sdk::types::intercept::WebSocketConnectionCtx {
+            impl From<self::preamble::kiwi::kiwi::intercept_types::Websocket> for ::kiwi_sdk::hook::intercept::WebSocketConnectionCtx {
                 fn from(value: self::preamble::kiwi::kiwi::intercept_types::Websocket) -> Self {
                     Self {
                         addr: value.addr,
@@ -84,21 +84,21 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl From<::kiwi_sdk::types::intercept::Action> for self::preamble::kiwi::kiwi::intercept_types::Action {
-                fn from(value: ::kiwi_sdk::types::intercept::Action) -> Self {
+            impl From<::kiwi_sdk::hook::intercept::Action> for self::preamble::kiwi::kiwi::intercept_types::Action {
+                fn from(value: ::kiwi_sdk::hook::intercept::Action) -> Self {
                     match value {
-                        ::kiwi_sdk::types::intercept::Action::Forward => Self::Forward,
-                        ::kiwi_sdk::types::intercept::Action::Discard => Self::Discard,
-                        ::kiwi_sdk::types::intercept::Action::Transform(payload) => Self::Transform(payload.into()),
+                        ::kiwi_sdk::hook::intercept::Action::Forward => Self::Forward,
+                        ::kiwi_sdk::hook::intercept::Action::Discard => Self::Discard,
+                        ::kiwi_sdk::hook::intercept::Action::Transform(payload) => Self::Transform(payload.into()),
                     }
                 }
             }
 
-            impl From<::kiwi_sdk::types::intercept::TransformedPayload> for self::preamble::kiwi::kiwi::intercept_types::TransformedPayload {
-                fn from(value: ::kiwi_sdk::types::intercept::TransformedPayload) -> Self {
+            impl From<::kiwi_sdk::hook::intercept::TransformedPayload> for self::preamble::kiwi::kiwi::intercept_types::TransformedPayload {
+                fn from(value: ::kiwi_sdk::hook::intercept::TransformedPayload) -> Self {
                     match value {
-                        ::kiwi_sdk::types::intercept::TransformedPayload::Kafka(payload) => Self::Kafka(payload),
-                        ::kiwi_sdk::types::intercept::TransformedPayload::Counter(count) => Self::Counter(count),
+                        ::kiwi_sdk::hook::intercept::TransformedPayload::Kafka(payload) => Self::Kafka(payload),
+                        ::kiwi_sdk::hook::intercept::TransformedPayload::Counter(count) => Self::Counter(count),
                     }
                 }
             }
@@ -116,180 +116,77 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
     quote!(
         #func
         mod __kiwi_authenticate {
-            pub mod preamble {
+            mod preamble {
                 #preamble
             }
 
             impl preamble::Guest for preamble::Kiwi {
-                fn authenticate(incoming: self::preamble::wasi::http::types::IncomingRequest) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
-                    super::#func_name(incoming).into()
+                fn authenticate(incoming: self::preamble::kiwi::kiwi::authenticate_types::HttpRequest) -> self::preamble::kiwi::kiwi::authenticate_types::Outcome {
+                    super::#func_name(incoming.into()).into()
                 }
             }
 
-            impl From<::kiwi_sdk::types::authenticate::Outcome> for self::preamble::kiwi::kiwi::authenticate_types::Outcome {
-                fn from(value: ::kiwi_sdk::types::authenticate::Outcome) -> Self {
+            impl From<::kiwi_sdk::hook::authenticate::Outcome> for self::preamble::kiwi::kiwi::authenticate_types::Outcome {
+                fn from(value: ::kiwi_sdk::hook::authenticate::Outcome) -> Self {
                     match value {
-                        ::kiwi_sdk::types::authenticate::Outcome::Authenticate => Self::Authenticate,
-                        ::kiwi_sdk::types::authenticate::Outcome::Reject => Self::Reject,
-                        ::kiwi_sdk::types::authenticate::Outcome::WithContext(payload) => Self::WithContext(payload),
+                        ::kiwi_sdk::hook::authenticate::Outcome::Authenticate => Self::Authenticate,
+                        ::kiwi_sdk::hook::authenticate::Outcome::Reject => Self::Reject,
+                        ::kiwi_sdk::hook::authenticate::Outcome::WithContext(payload) => Self::WithContext(payload),
                     }
                 }
             }
 
+            impl From<self::preamble::kiwi::kiwi::authenticate_types::HttpRequest> for ::kiwi_sdk::http::Request<()> {
+                fn from(value: self::preamble::kiwi::kiwi::authenticate_types::HttpRequest) -> Self {
+                    let mut uri_builder = ::kiwi_sdk::http::Uri::builder();
+
+                    if let Some(scheme) = value.scheme {
+                        let scheme = match scheme {
+                            ::kiwi_sdk::wit::wasi::http::types::Scheme::Http => ::kiwi_sdk::http::Scheme::HTTP,
+                            ::kiwi_sdk::wit::wasi::http::types::Scheme::Https => ::kiwi_sdk::http::Scheme::HTTPS,
+                            ::kiwi_sdk::wit::wasi::http::types::Scheme::Other(scheme) => panic!("Unsupported scheme"),
+                        };
+
+                        uri_builder = uri_builder.scheme(scheme);
+                    }
+
+                    if let Some(authority) = value.authority {
+                        uri_builder = uri_builder.authority(authority.as_str());
+                    }
+
+                    if let Some(path_with_query) = value.path_with_query {
+                        uri_builder = uri_builder.path_and_query(path_with_query.as_str());
+                    }
+
+                    let uri = uri_builder.build().expect("failed to build uri");
+
+                    let method = match value.method {
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Get => ::kiwi_sdk::http::Method::GET,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Head => ::kiwi_sdk::http::Method::HEAD,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Post => ::kiwi_sdk::http::Method::POST,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Put => ::kiwi_sdk::http::Method::PUT,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Delete => ::kiwi_sdk::http::Method::DELETE,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Connect => ::kiwi_sdk::http::Method::CONNECT,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Options => ::kiwi_sdk::http::Method::OPTIONS,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Trace => ::kiwi_sdk::http::Method::TRACE,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Patch => ::kiwi_sdk::http::Method::PATCH,
+                        ::kiwi_sdk::wit::wasi::http::types::Method::Other(_) => panic!("Unknown method"),
+                    };
+
+                    let mut request_builder = ::kiwi_sdk::http::Request::builder()
+                        .method(method)
+                        .uri(uri);
+
+                    for (key, value) in value.headers {
+                        request_builder = request_builder.header(key, value);
+                    }
+
+                    request_builder.body(()).expect("failed to build request")
+                }
+            }
         }
     )
         .into()
-}
-
-#[proc_macro]
-pub fn use_wasi_http_types(item: TokenStream) -> TokenStream {
-    let name = syn::parse_macro_input!(item as syn::Ident);
-
-    quote! {
-        use __kiwi_authenticate::preamble::wasi::http::types as #name;
-    }
-    .into()
-}
-
-#[proc_macro]
-pub fn make_http_request_fn(item: TokenStream) -> TokenStream {
-    let name = syn::parse_macro_input!(item as syn::Ident);
-
-    quote! {
-        fn #name(
-            method: __kiwi_authenticate::preamble::wasi::http::types::Method,
-            scheme: __kiwi_authenticate::preamble::wasi::http::types::Scheme,
-            authority: &str,
-            path_with_query: &str,
-            body: Option<&[u8]>,
-            additional_headers: Option<&[(String, Vec<u8>)]>,
-        ) -> anyhow::Result<::kiwi_sdk::types::http::Response> {
-            fn header_val(v: &str) -> Vec<u8> {
-                v.to_string().into_bytes()
-            }
-            let headers = __kiwi_authenticate::preamble::wasi::http::types::Headers::from_list(
-                &[
-                    &[
-                        ("User-agent".to_string(), header_val("WASI-HTTP/0.0.1")),
-                        ("Content-type".to_string(), header_val("application/json")),
-                    ],
-                    additional_headers.unwrap_or(&[]),
-                ]
-                .concat(),
-            )?;
-
-            let request = __kiwi_authenticate::preamble::wasi::http::types::OutgoingRequest::new(headers);
-
-            request
-                .set_method(&method)
-                .map_err(|()| anyhow::anyhow!("failed to set method"))?;
-            request
-                .set_scheme(Some(&scheme))
-                .map_err(|()| anyhow::anyhow!("failed to set scheme"))?;
-            request
-                .set_authority(Some(authority))
-                .map_err(|()| anyhow::anyhow!("failed to set authority"))?;
-            request
-                .set_path_with_query(Some(&path_with_query))
-                .map_err(|()| anyhow::anyhow!("failed to set path_with_query"))?;
-
-            let outgoing_body = request
-                .body()
-                .map_err(|_| anyhow::anyhow!("outgoing request write failed"))?;
-
-            if let Some(mut buf) = body {
-                let request_body = outgoing_body
-                    .write()
-                    .map_err(|_| anyhow::anyhow!("outgoing request write failed"))?;
-
-                let pollable = request_body.subscribe();
-                while !buf.is_empty() {
-                    pollable.block();
-
-                    let permit = match request_body.check_write() {
-                        Ok(n) => n,
-                        Err(_) => anyhow::bail!("output stream error"),
-                    };
-
-                    let len = buf.len().min(permit as usize);
-                    let (chunk, rest) = buf.split_at(len);
-                    buf = rest;
-
-                    match request_body.write(chunk) {
-                        Err(_) => anyhow::bail!("output stream error"),
-                        _ => {}
-                    }
-                }
-
-                match request_body.flush() {
-                    Err(_) => anyhow::bail!("output stream error"),
-                    _ => {}
-                }
-
-                pollable.block();
-
-                match request_body.check_write() {
-                    Ok(_) => {}
-                    Err(_) => anyhow::bail!("output stream error"),
-                };
-            }
-
-            let future_response = __kiwi_authenticate::preamble::wasi::http::outgoing_handler::handle(request, None)?;
-
-            __kiwi_authenticate::preamble::wasi::http::types::OutgoingBody::finish(outgoing_body, None)?;
-
-            let incoming_response = match future_response.get() {
-                Some(result) => result.map_err(|()| anyhow::anyhow!("response already taken"))?,
-                None => {
-                    let pollable = future_response.subscribe();
-                    pollable.block();
-                    future_response
-                        .get()
-                        .expect("incoming response available")
-                        .map_err(|()| anyhow::anyhow!("response already taken"))?
-                }
-            }?;
-
-            drop(future_response);
-
-            let status = incoming_response.status();
-
-            let headers_handle = incoming_response.headers();
-            let headers = headers_handle.entries();
-            drop(headers_handle);
-
-            let incoming_body = incoming_response
-                .consume()
-                .map_err(|()| anyhow::anyhow!("incoming response has no body stream"))?;
-
-            drop(incoming_response);
-
-            let input_stream = incoming_body.stream().unwrap();
-            let input_stream_pollable = input_stream.subscribe();
-
-            let mut body = Vec::new();
-            loop {
-                input_stream_pollable.block();
-
-                let mut body_chunk = match input_stream.read(1024 * 1024) {
-                    Ok(c) => c,
-                    Err(__kiwi_authenticate::preamble::wasi::io::streams::StreamError::Closed) => break,
-                    Err(e) => Err(anyhow::anyhow!("input_stream read failed: {e:?}"))?,
-                };
-
-                if !body_chunk.is_empty() {
-                    body.append(&mut body_chunk);
-                }
-            }
-
-            Ok(::kiwi_sdk::types::http::Response {
-                status,
-                headers,
-                body,
-            })
-        }
-    }
-    .into()
 }
 
 #[derive(Copy, Clone)]

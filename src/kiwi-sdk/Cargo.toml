@@ -8,5 +8,7 @@ license.workspace = true
 description = "The Kiwi SDK allows you to write pluggable modules that hook into the Kiwi runtime."
 
 [dependencies]
+anyhow = "1.0.79"
 kiwi-macro = { path = "./macro" }
 wit-bindgen = "0.17.0"
+http = "1.0.0"

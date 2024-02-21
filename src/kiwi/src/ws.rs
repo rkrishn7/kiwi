@@ -111,7 +111,10 @@ where
                     }
                     outcome => {
                         if outcome.is_err() {
-                            tracing::error!("Failed to run authentication hook");
+                            tracing::error!(
+                                "Failed to run authentication hook. Error {:?}",
+                                outcome.unwrap_err()
+                            );
                         }
 
                         let mut res = ErrorResponse::new(Some("Unauthorized".to_string()));

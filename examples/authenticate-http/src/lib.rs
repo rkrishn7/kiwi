@@ -1,31 +1,17 @@
-use kiwi_sdk::hook;
-use kiwi_sdk::types::authenticate::Outcome;
-use kiwi_sdk::wasi;
+use http::request::Builder;
+use kiwi_sdk::hook::authenticate::{authenticate, Outcome};
+use kiwi_sdk::http::{request as http_request, Request};
 
-wasi::use_wasi_http_types!(http_types);
-wasi::http::make_http_request_fn!(http_request);
-
-#[hook::authenticate]
-fn handle(req: http_types::IncomingRequest) -> Outcome {
-    let path_with_query = if let Some(path_with_query) = req.path_with_query() {
-        path_with_query
-    } else {
-        return Outcome::Reject;
-    };
-
-    let uri: http::Uri = match path_with_query.parse() {
-        Ok(uri) => uri,
-        Err(_) => return Outcome::Reject,
-    };
-
-    let query = match uri.query() {
+#[authenticate]
+fn handle(req: Request<()>) -> Outcome {
+    let query = match req.uri().query() {
         Some(query) => query,
         None => return Outcome::Reject,
     };
 
     let parts: Vec<&str> = query.split('&').collect();
 
-    let token = {
+    let key = {
         let mut token = None;
         for (key, value) in parts.iter().map(|part| {
             let mut parts = part.split('=');
@@ -44,18 +30,18 @@ fn handle(req: http_types::IncomingRequest) -> Outcome {
         }
     };
 
-    println!("token: {}", token);
+    println!("Received API Key: {key}");
 
-    match http_request(
-        http_types::Method::Get,
-        http_types::Scheme::Https,
-        "google.com",
-        "/",
-        None,
-        None,
-    ) {
+    let request = Builder::new()
+        .method("GET")
+        .uri("https://example.com")
+        .header("x-api-key", key)
+        .body(Vec::new())
+        .unwrap();
+
+    match http_request(request) {
         Ok(res) => {
-            if std::str::from_utf8(&res.body).unwrap() == "OK" {
+            if res.status() == 200 {
                 Outcome::Authenticate
             } else {
                 Outcome::Reject

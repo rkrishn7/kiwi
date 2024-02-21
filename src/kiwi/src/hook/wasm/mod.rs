@@ -7,7 +7,6 @@ use once_cell::sync::Lazy;
 use wasmtime::component::{Component, InstancePre, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::preview2::{self, Stdout, WasiCtx, WasiCtxBuilder, WasiView};
-use wasmtime_wasi_http::bindings::http::types::IncomingRequest;
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use anyhow::Context;
@@ -163,17 +162,11 @@ impl Authenticate for WasmAuthenticateHook {
 
         builder.stdout(Stdout);
 
-        let mut state = Host {
+        let state = Host {
             table: ResourceTable::new(),
             wasi: builder.build(),
             http: WasiHttpCtx,
         };
-
-        let (parts, _) = request.into_parts();
-
-        let request = IncomingRequest::new(&mut state, parts, None);
-
-        let resource = state.table_mut().push(request)?;
 
         let mut store = Store::new(&ENGINE, state);
 
@@ -183,7 +176,9 @@ impl Authenticate for WasmAuthenticateHook {
         )
         .await?;
 
-        let res = bindings.call_authenticate(&mut store, resource).await?;
+        let res = bindings
+            .call_authenticate(&mut store, &request.into())
+            .await?;
 
         Ok(res.into())
     }
