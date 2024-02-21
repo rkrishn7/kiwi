@@ -20,7 +20,7 @@ Kiwi is an extensible WebSocket adapter for real-time data streaming. It impleme
 - **Subscribe with Ease**: Set up subscriptions to various sources with a simple command. Kiwi efficiently routes event data to connected WebSocket clients based on these subscriptions.
 - **Backpressure Management**: Kiwi draws from flow-control concepts used by Reactive Streams. Specifically, clients can emit a `request(n)` signal to control the rate at which they receive events.
 - **Extensible**: Kiwi supports WebAssembly (WASM) plugins to enrich and control the flow of data. Plugins are called with context about the current connection and event, and can be used to control how/when events are forwarded to downstream clients.
-- **Secure**: Kiwi supports TLS encryption and client authentication via JWT tokens, which can be used to authorize access to specific sources.
+- **Secure**: Kiwi supports TLS encryption and custom client authentication via WASM plugins.
 - **Configuration Reloads**: Kiwi can reload a subset of its configuration at runtime, allowing for dynamic updates to sources without restarting the server.
 
 ## Motivation
@@ -68,7 +68,7 @@ There are two types of plugins that Kiwi supports:
   - For example, imagine you are writing a chat application and only want users to receive messages they are authorized to see. While the chat message source may emit messages for all conversations, an intercept plugin can be used to filter out messages that the user is not authorized to see.
 
 - **Authentication**: Authentication plugins are invoked when a client connects to the server. They are called with context about the current connection and can be used to authenticate the client, potentially rejecting the connection if the client is not authorized to connect.
-  - Authentication plugins allow users of Kiwi to enforce custom authentication logic, such as verifying JWT tokens or checking for specific user roles. Additionally, the plugin may return custom context for the connection which is passed downstream to the intercept plugin.
+  - Authentication plugins allow users of Kiwi to enforce custom authentication logic, such as verifying JWT tokens or checking for specific user roles. Additionally, the plugin may return custom context for the connection which is passed downstream to each invocation of the intercept plugin.
 
 For more information on writing and using plugins, please see the [plugin documentation](./doc/PLUGINS.md).
 
@@ -78,7 +78,7 @@ Details on the Kiwi protocol can be found in the [protocol documentation](./doc/
 
 ## Configuration
 
-Details on configuring Kiwi can be found in the [configuration documentation](./doc/CONFIGURATION.md).
+Details on configuring Kiwi can be found in the [configuration documentation](./doc/configuration/README.md).
 
 ## Considerations
 
