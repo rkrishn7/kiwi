@@ -21,17 +21,17 @@ interface authenticate-types {
     record http-request {
         /// Returns the method of the incoming request.
         method: method,
-    
+
         /// Returns the path with query parameters from the request, as a string.
         path-with-query: option<string>,
-    
+
         /// Returns the protocol scheme from the request.
         scheme: option<scheme>,
-    
+
         /// Returns the authority from the request, if it was present.
         authority: option<string>,
-    
+
         /// Get the `headers` associated with the request.
         headers: list<tuple<field-key, field-value>>,
-      }
+    }
 }

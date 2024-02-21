@@ -15,7 +15,7 @@ world authenticate-hook {
 }
 
 world internal {
-    use wasi:http/types@0.2.0.{incoming-request};
+    use wasi:http/types@0.2.0.{method, scheme, field-key, field-value};
 
     import wasi:http/outgoing-handler@0.2.0;
 }

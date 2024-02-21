@@ -1109,6 +1109,7 @@ name = "kiwi-sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "http",
  "kiwi-macro",
  "wit-bindgen",
 ]
