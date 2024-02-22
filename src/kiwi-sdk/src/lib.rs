@@ -1,3 +1,6 @@
+//! # Kiwi SDK
+//! This crate provides a Rust interface to the [Kiwi](https://github.com/rkrishn7/kiwi) platform.
+
 pub mod hook;
 
 #[doc(hidden)]
