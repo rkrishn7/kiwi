@@ -44,7 +44,7 @@ jobs:
       - name: cargo llvm-cov
         run: cargo llvm-cov --locked --workspace --lib --all-features --lcov --output-path lcov.info
       - name: Upload to codecov.io
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
