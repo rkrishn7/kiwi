@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-macro"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-sdk"
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 dependencies = [
  "anyhow",
  "http",
