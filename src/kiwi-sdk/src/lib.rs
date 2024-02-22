@@ -8,7 +8,7 @@ pub mod wit {
     #![allow(missing_docs)]
 
     wit_bindgen::generate!({
-        path: "../wit",
+        path: "./wit",
         world: "internal",
     });
 }
