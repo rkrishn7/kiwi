@@ -32,6 +32,7 @@ impl From<&Method> for wasi_http::types::Method {
     }
 }
 
+// NOTE: This implementation is adapted from https://github.com/bytecodealliance/wasmtime/blob/main/crates/test-programs/src/http.rs
 /// Make an outbound HTTP request
 pub fn request<T: AsRef<[u8]>>(req: Request<T>) -> anyhow::Result<Response<Vec<u8>>> {
     let additional_headers: Vec<(String, Vec<u8>)> = req
