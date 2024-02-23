@@ -78,7 +78,7 @@ Details on the Kiwi protocol can be found in the [protocol documentation](./doc/
 
 ## Configuration
 
-Details on configuring Kiwi can be found in the [configuration documentation](./doc/configuration/README.md).
+Details on configuring Kiwi can be found in the [configuration documentation](./doc/CONFIGURATION.md).
 
 ## Considerations
 
