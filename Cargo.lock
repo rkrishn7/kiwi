@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-macro"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-sdk"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "anyhow",
  "http",

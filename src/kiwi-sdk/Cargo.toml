@@ -1,6 +1,6 @@
 [package]
 name = "kiwi-sdk"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -10,6 +10,6 @@ description = "The Kiwi SDK allows you to write pluggable modules that hook into
 
 [dependencies]
 anyhow = "1.0.79"
-kiwi-macro = { version = "~0.1.1-alpha.6", path = "./macro" }
+kiwi-macro = { version = "~0.1.1-alpha.7", path = "./macro" }
 wit-bindgen = "0.17.0"
 http = "1.0.0"
