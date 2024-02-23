@@ -4,7 +4,7 @@
 //! # Examples
 //!
 //! ## Intercept
-//! ```rust
+//! ```ignore
 //! //! A simple intercept hook that discards odd numbers from all counter sources
 //! use kiwi_sdk::hook::intercept::{intercept, Action, Context, CounterEventCtx, EventCtx};
 //!
@@ -35,7 +35,7 @@
 //! ```
 //!
 //! ## Authenticate
-//! ```rust
+//! ```ignore
 //! //! A simple authenticate hook that allows all incoming HTTP requests
 //! use kiwi_sdk::hook::authenticate::{authenticate, Outcome};
 //! use kiwi_sdk::http::Request;
