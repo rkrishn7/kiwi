@@ -1,17 +1,43 @@
+//! This crate exports macros that are  are used to generate the necessary code
+//! to turn a source file into a `Guest` module, suitable for compilation and
+//! execution within Kiwi's embedded WASM component runtime ([wasmtime](https://github.com/bytecodealliance/wasmtime)).
+//!
+//! ### NOTE
+//! This crate is intended for use only via the Kiwi SDK and should not be used directly.
+
 use proc_macro::TokenStream;
 use quote::quote;
 
+/// Wit sources are packaged as part of the release process, so we can reference them
+/// from the crate root. We need to hoist the path here to ensure it references the correct
+/// location.
+const WIT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/wit");
+
+/// Macro necessary for creating an intercept hook.
 #[proc_macro_attribute]
 pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = syn::parse_macro_input!(item as syn::ItemFn);
     let func_name = &func.sig.ident;
-    let preamble = preamble(Hook::Intercept);
 
+    // Note that intercept modules don't link in WASI, so there's no need
+    // to remap any WASI imports to their counterparts located in the Kiwi SDK.
+    // In fact, because Kiwi does not link in WASI for intercept modules, attempting
+    // to use WASI imports should result in an error.
     quote!(
         #func
         mod __kiwi_intercept {
             mod preamble {
-                #preamble
+                #![allow(missing_docs)]
+                ::kiwi_sdk::wit_bindgen::generate!({
+                    path: #WIT_PATH,
+                    world: "intercept-hook",
+                    runtime_path: "::kiwi_sdk::wit_bindgen::rt",
+                    exports: {
+                        world: Kiwi,
+                    }
+                });
+
+                pub struct Kiwi;
             }
 
             impl preamble::Guest for preamble::Kiwi {
@@ -107,17 +133,37 @@ pub fn intercept(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Macro necessary for creating an authenticate hook.
 #[proc_macro_attribute]
 pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = syn::parse_macro_input!(item as syn::ItemFn);
     let func_name = &func.sig.ident;
-    let preamble = preamble(Hook::Authenticate);
 
+    // Kiwi does link in WASI for authenticate modules, so we need to remap the
+    // WASI imports to their counterparts located in the Kiwi SDK.
     quote!(
         #func
         mod __kiwi_authenticate {
             mod preamble {
-                #preamble
+                #![allow(missing_docs)]
+                ::kiwi_sdk::wit_bindgen::generate!({
+                    path: #WIT_PATH,
+                    world: "authenticate-hook",
+                    runtime_path: "::kiwi_sdk::wit_bindgen::rt",
+                    exports: {
+                        world: Kiwi,
+                    },
+                    with: {
+                        "wasi:http/outgoing-handler@0.2.0": ::kiwi_sdk::wit::wasi::http::outgoing_handler,
+                        "wasi:http/types@0.2.0": ::kiwi_sdk::wit::wasi::http::types,
+                        "wasi:clocks/monotonic-clock@0.2.0": ::kiwi_sdk::wit::wasi::clocks::monotonic_clock,
+                        "wasi:io/poll@0.2.0": ::kiwi_sdk::wit::wasi::io::poll,
+                        "wasi:io/streams@0.2.0": ::kiwi_sdk::wit::wasi::io::streams,
+                        "wasi:io/error@0.2.0": ::kiwi_sdk::wit::wasi::io::error,
+                    },
+                });
+
+                pub struct Kiwi;
             }
 
             impl preamble::Guest for preamble::Kiwi {
@@ -187,27 +233,4 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     )
         .into()
-}
-
-#[derive(Copy, Clone)]
-enum Hook {
-    Intercept,
-    Authenticate,
-}
-
-fn preamble(hook: Hook) -> proc_macro2::TokenStream {
-    let generated = match hook {
-        Hook::Intercept => include_str!("intercept_hook.rs"),
-        Hook::Authenticate => include_str!("authenticate_hook.rs"),
-    };
-
-    let toks = syn::parse_str::<proc_macro2::TokenStream>(generated)
-        .expect("failed to parse wit-bindgen generated code");
-
-    quote! {
-        #![allow(missing_docs)]
-        #toks
-
-        pub struct Kiwi;
-    }
 }
