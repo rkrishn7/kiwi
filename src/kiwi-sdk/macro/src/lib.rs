@@ -1,54 +1,9 @@
-//! This crate provides a set of macros for use via the Kiwi SDK. These macros
-//! are used to generate the necessary code to turn a source file into a `Guest` module,
-//! suitable for compilation and execution within Kiwi's embedded WASM component runtime
-//! ([wasmtime](https://github.com/bytecodealliance/wasmtime)).
+//! This crate exports macros that are  are used to generate the necessary code
+//! to turn a source file into a `Guest` module, suitable for compilation and
+//! execution within Kiwi's embedded WASM component runtime ([wasmtime](https://github.com/bytecodealliance/wasmtime)).
 //!
-//! # Examples
-//!
-//! ## Intercept
-//! ```rust
-//! //! A simple intercept hook that discards odd numbers from all counter sources
-//! use kiwi_sdk::hook::intercept::{intercept, Action, Context, CounterEventCtx, EventCtx};
-//!
-//! /// You must use the `#[intercept]` macro to define an intercept hook.
-//! #[intercept]
-//! fn handle(ctx: Context) -> Action {
-//!     match ctx.event {
-//!         // We only care about counter sources in this example
-//!         EventCtx::Counter(CounterEventCtx {
-//!             source_id: _,
-//!             count,
-//!         }) => {
-//!             if count % 2 == 0 {
-//!                 // Returning `Action::Forward` instructs Kiwi to forward the event
-//!                 // to the associated client.
-//!                 return Action::Forward;
-//!             } else {
-//!                 // Returning `Action::Discard` instructs Kiwi to discard the event,
-//!                 // preventing it from reaching the associated client.
-//!                 return Action::Discard;
-//!             }
-//!         }
-//!         _ => {}
-//!     }
-//!
-//!     Action::Forward
-//! }
-//! ```
-//!
-//! ## Authenticate
-//! ```rust
-//! //! A simple authenticate hook that allows all incoming HTTP requests
-//! use kiwi_sdk::hook::authenticate::{authenticate, Outcome};
-//! use kiwi_sdk::http::Request;
-//!
-//! /// You must use the `#[authenticate]` macro to define an authenticate hook.
-//! #[authenticate]
-//! fn handle(req: Request<()>) -> Outcome {
-//!     // Returning `Outcome::Authenticate` instructs Kiwi to allow the connection to be established.
-//!     Outcome::Authenticate
-//! }
-//! ```
+//! ### NOTE
+//! This crate is intended for use only via the Kiwi SDK and should not be used directly.
 
 use proc_macro::TokenStream;
 use quote::quote;
