@@ -1,12 +1,12 @@
-# 🥝 Kiwi - Seamless Real-Time Data Streaming
+# 🥝 Kiwi - Extensible Real-Time Data Streaming
 
 [![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![CircleCI](https://dl.circleci.com/status-badge/img/gh/rkrishn7/kiwi/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/rkrishn7/kiwi/tree/main) ![contributions](https://img.shields.io/badge/contributions-welcome-green)
 
-Kiwi is an extensible WebSocket adapter for real-time data streaming. It implements a simple protocol for clients to subscribe to configured sources, ensuring that they stay reactive and up-to-date with the latest data.
+Kiwi is a WebSocket adapter for real-time data streaming. It implements a simple protocol for clients to subscribe to configured sources, while allowing operators to maintain control over the flow of data via [WebAssembly](https://webassembly.org/) (WASM) plugins. Kiwi is designed to be a lightweight, extensible, and secure solution for delivering real-time data to clients, ensuring that they stay reactive and up-to-date with the latest data.
 
-***NOTE***: Kiwi is currently in active development and is not yet ready for production use.
+***NOTE***: Kiwi is currently in active development and is not yet recommended for production use.
 
-- [🥝 Kiwi - Seamless Real-Time Data Streaming](#-kiwi---seamless-real-time-data-streaming)
+- [🥝 Kiwi - Extensible Real-Time Data Streaming](#-kiwi---extensible-real-time-data-streaming)
   - [Features](#features)
   - [Motivation](#motivation)
   - [Getting Started](#getting-started)
@@ -14,12 +14,13 @@ Kiwi is an extensible WebSocket adapter for real-time data streaming. It impleme
   - [Protocol](#protocol)
   - [Configuration](#configuration)
   - [Considerations](#considerations)
+  - [Known Limitations](#known-limitations)
 
 ## Features
 
 - **Subscribe with Ease**: Set up subscriptions to various sources with a simple command. Kiwi efficiently routes event data to connected WebSocket clients based on these subscriptions.
-- **Backpressure Management**: Kiwi draws from flow-control concepts used by Reactive Streams. Specifically, clients can emit a `request(n)` signal to control the rate at which they receive events.
 - **Extensible**: Kiwi supports WebAssembly (WASM) plugins to enrich and control the flow of data. Plugins are called with context about the current connection and event, and can be used to control how/when events are forwarded to downstream clients.
+- **Backpressure Management**: Kiwi draws from flow-control concepts used by Reactive Streams. Specifically, clients can emit a `request(n)` signal to control the rate at which they receive events.
 - **Secure**: Kiwi supports TLS encryption and custom client authentication via WASM plugins.
 - **Configuration Reloads**: Kiwi can reload a subset of its configuration at runtime, allowing for dynamic updates to sources without restarting the server.
 
@@ -54,7 +55,7 @@ Next, in the same directory as the `kiwi.yml` file, run the following command to
 docker run -p 8000:8000 -v $(pwd)/kiwi.yml:/etc/kiwi/config/kiwi.yml ghcr.io/rkrishn7/kiwi:main
 ```
 
-Success! Kiwi is now running and ready to accept WebSocket connections on port 8000. You can start interacting with the server by using a WebSocket client utility of your choice (e.g. [wscat](https://www.npmjs.com/package/wscat)). 
+Success! Kiwi is now running and ready to accept WebSocket connections on port 8000. You can start interacting with the server by using a WebSocket client utility of your choice (e.g. [wscat](https://www.npmjs.com/package/wscat)). Refer to the [protocol documentation](./doc/PROTOCOL.md) for details on how to interact with the Kiwi server.
 
 For more examples, please see the [examples](./examples) directory.
 
@@ -70,7 +71,7 @@ There are two types of plugins that Kiwi supports:
 - **Authentication**: Authentication plugins are invoked when a client connects to the server. They are called with context about the current connection and can be used to authenticate the client, potentially rejecting the connection if the client is not authorized to connect.
   - Authentication plugins allow users of Kiwi to enforce custom authentication logic, such as verifying JWT tokens or checking for specific user roles. Additionally, the plugin may return custom context for the connection which is passed downstream to each invocation of the intercept plugin.
 
-For more information on writing and using plugins, please see the [plugin documentation](./doc/PLUGINS.md).
+For more information on writing and using plugins, please see the [plugin documentation](./doc/PLUGIN.md).
 
 ## Protocol
 
@@ -87,3 +88,9 @@ Kiwi is designed as a real-time event notification service, leveraging WebAssemb
 Kiwi excels at handling event-driven communication with efficient backpressure management, making it suitable for real-time messaging and lightweight data transformation tasks. However, users requiring advanced stream processing capabilities—such as complex event processing (CEP), stateful computations, windowing, and aggregation over unbounded datasets—are encouraged to use specialized stream processing systems.
 
 Kiwi is designed to be a part of a broader architecture where it can work in conjunction with such systems, rather than serve as a standalone solution for high-throughput data processing needs.
+
+## Known Limitations
+
+Currently, Kiwi does not leverage balanced consumer groups for Kafka sources. This means that Kiwi does not support automatic load balancing of partitions across multiple instances of Kiwi, thus each instance of Kiwi subscribes to the entire set of partitions for a given topic. As a result, Kiwi may not be suitable for very high-throughput Kafka sources with large numbers of partitions.
+
+In the future, Kiwi may support balanced consumer groups for Kafka sources, enabling parallel processing of partitions across multiple instances of Kiwi. However, this feature is not planned for at this time.

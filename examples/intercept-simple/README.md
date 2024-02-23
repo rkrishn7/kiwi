@@ -4,7 +4,6 @@ This example highlights how to write a simple WebAssembly (WASM) hook using the 
 
 - [Intercept (Simple)](#intercept-simple)
   - [Running the Example](#running-the-example)
-    - [Prerequisites](#prerequisites)
     - [Building the WASM Hook](#building-the-wasm-hook)
     - [Running Kiwi](#running-kiwi)
     - [Interacting with Kiwi](#interacting-with-kiwi)
@@ -13,12 +12,6 @@ This example highlights how to write a simple WebAssembly (WASM) hook using the 
 ## Running the Example
 
 > **NOTE**: The commands in this example should be run from this directory (`examples/intercept-simple`).
-
-### Prerequisites
-
-- [Rust](https://www.rust-lang.org/tools/install) - The Rust toolchain is required to build the WASM hook.
-- [Docker](https://docs.docker.com/get-docker/) - Docker is utilized in this example as a simple way to run Kiwi.
-- [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) - The Node.js package manager is required to install [wscat](https://www.npmjs.com/package/wscat), a WebSocket client used to interact with the Kiwi server.
 
 ### Building the WASM Hook
 
@@ -48,13 +41,7 @@ docker run -p 8000:8000 -v $(pwd)/kiwi.yml:/etc/kiwi/config/kiwi.yml \
 
 ### Interacting with Kiwi
 
-The Kiwi server is now running with the WASM hook loaded. To interact with it, let's go ahead and install [wscat](https://github.com/websockets/wscat):
-
-```sh
-npm install -g wscat
-```
-
-Awesome! Now we can interact with the Kiwi server at `ws://localhost:8000`. Let's try it out by subscribing to a counter source and emitting some events. First, let's connect to the server using `wscat`:
+Now we can interact with the Kiwi server at `ws://localhost:8000`. Let's try it out by subscribing to a counter source and emitting some events. First, let's connect to the server using `wscat`:
 
 ```sh
 wscat -c ws://127.0.0.1:8000
