@@ -27,7 +27,7 @@ tokio-stream = { version = "0.1.14", features = ["sync"] }
 tokio-tungstenite = "0.21.0"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
-wasmtime = { version = "17.0.0", features = ["component-model", "async"] }
+wasmtime = { version = "18.0.1", features = ["component-model", "async"] }
 wasmtime-wasi = "17.0.0"
 wasmtime-wasi-http = "17.0.0"
 wat = "1.0.85"
