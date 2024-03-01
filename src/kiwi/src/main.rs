@@ -1,16 +1,20 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use clap::Parser;
 
-use kiwi::config::{Config, SourceType};
+use kiwi::config::reconcile_sources;
+use kiwi::config::Config;
 use kiwi::hook::wasm::{WasmAuthenticateHook, WasmInterceptHook};
-use kiwi::source::counter::build_source as build_counter_source;
-use kiwi::source::kafka::{build_source as build_kafka_source, start_partition_discovery};
+use kiwi::source;
+use kiwi::source::kafka::start_partition_discovery;
 use kiwi::source::Source;
 use kiwi::source::SourceId;
+use notify::RecommendedWatcher;
+use notify::Watcher;
 
 /// kiwi is a bridge between your backend services and front-end applications.
 /// It seamlessly and efficiently manages the flow of real-time Kafka events
@@ -36,60 +40,14 @@ async fn main() -> anyhow::Result<()> {
         .with_max_level(args.log_level)
         .init();
 
-    let config = Config::parse(&args.config)?;
+    let config_path = args.config.clone();
+
+    let config = Config::parse(&config_path)?;
 
     let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
 
-    for source in config.sources.into_iter() {
-        let (source_id, source) = match source {
-            SourceType::Kafka { topic } => {
-                if let Some(kafka_config) = config.kafka.as_ref() {
-                    let source = build_kafka_source(
-                        topic.clone(),
-                        &kafka_config.bootstrap_servers,
-                        &kafka_config.group_id_prefix,
-                    )?;
-
-                    (topic, source)
-                } else {
-                    return Err(anyhow::anyhow!(
-                        "Kafka source specified but no Kafka configuration found"
-                    ));
-                }
-            }
-            SourceType::Counter {
-                id,
-                min,
-                max,
-                interval_ms,
-                lazy,
-            } => {
-                let source = build_counter_source(
-                    id.clone(),
-                    min,
-                    max,
-                    std::time::Duration::from_millis(interval_ms),
-                    lazy,
-                );
-
-                (id, source)
-            }
-        };
-
-        match sources
-            .lock()
-            .expect("poisoned lock")
-            .entry(source_id.clone())
-        {
-            std::collections::btree_map::Entry::Occupied(_) => {
-                panic!("Found duplicate source ID in configuration: {}", source_id);
-            }
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(source);
-            }
-        }
-    }
+    reconcile_sources(&mut sources.lock().expect("poisoned lock"), &config)?;
 
     if let Some(kafka_config) = config.kafka.as_ref() {
         if kafka_config.partition_discovery_enabled {
@@ -102,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
             )?;
         }
     }
+
+    let _watcher = init_config_watcher(Arc::clone(&sources), &args)?;
 
     let adapter_path = config
         .hooks
@@ -138,4 +98,46 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+fn init_config_watcher(
+    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>>,
+    args: &Args,
+) -> anyhow::Result<RecommendedWatcher> {
+    let (tx, mut rx) = tokio::sync::watch::channel(());
+
+    let mut watcher = RecommendedWatcher::new(
+        move |res: notify::Result<notify::Event>| {
+            if let Ok(event) = res {
+                match event.kind {
+                    notify::EventKind::Modify(_) => {
+                        tx.send(()).expect("config update channel closed");
+                    }
+                    _ => (),
+                }
+            }
+        },
+        notify::Config::default(),
+    )?;
+
+    let path = args.config.clone();
+
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            if let Err(e) = Config::parse(&path).and_then(|config| {
+                reconcile_sources(&mut sources.lock().expect("poisoned lock"), &config)
+            }) {
+                tracing::error!("Failed to reload config: {}", e);
+                continue;
+            }
+
+            tracing::info!("Configuration changes applied");
+        }
+
+        tracing::error!("config update sender dropped");
+    });
+
+    watcher.watch(args.config.as_ref(), notify::RecursiveMode::NonRecursive)?;
+
+    Ok(watcher)
 }

@@ -100,10 +100,11 @@ pub(super) fn get_linker(typ: WasmHookType) -> anyhow::Result<Linker<Host>> {
 }
 
 pub(super) fn create_instance_pre<P: AsRef<Path>>(
-    linker: &Linker<Host>,
+    typ: WasmHookType,
     file: P,
     adapter: Option<P>,
 ) -> anyhow::Result<InstancePre<Host>> {
+    let linker = get_linker(typ)?;
     let bytes = encode_component(file, adapter)?;
     let component = Component::from_binary(&ENGINE, &bytes)?;
 
@@ -113,18 +114,13 @@ pub(super) fn create_instance_pre<P: AsRef<Path>>(
 }
 
 #[derive(Clone)]
-pub struct WasmHook;
-
-#[derive(Clone)]
 pub struct WasmAuthenticateHook {
     instance_pre: Arc<InstancePre<Host>>,
 }
 
 impl WasmAuthenticateHook {
     pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
-        let linker = get_linker(WasmHookType::Authenticate)?;
-
-        let instance_pre = create_instance_pre(&linker, file, adapter)?;
+        let instance_pre = create_instance_pre(WasmHookType::Authenticate, file, adapter)?;
 
         Ok(Self {
             instance_pre: Arc::new(instance_pre),
@@ -139,9 +135,7 @@ pub struct WasmInterceptHook {
 
 impl WasmInterceptHook {
     pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
-        let linker = get_linker(WasmHookType::Intercept)?;
-
-        let instance_pre = create_instance_pre(&linker, file, adapter)?;
+        let instance_pre = create_instance_pre(WasmHookType::Intercept, file, adapter)?;
 
         Ok(Self {
             instance_pre: Arc::new(instance_pre),

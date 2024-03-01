@@ -338,7 +338,8 @@ pub fn start_partition_discovery(
     let client = create_metadata_client(bootstrap_servers)?;
 
     std::thread::spawn(move || loop {
-        // Temporary MutexGuard dropped at the end of this statement
+        std::thread::sleep(poll_interval);
+
         let topics = topic_sources
             .lock()
             .expect("poisoned lock")
@@ -371,8 +372,6 @@ pub fn start_partition_discovery(
                 }
             }
         }
-
-        std::thread::sleep(poll_interval);
     });
 
     Ok(())

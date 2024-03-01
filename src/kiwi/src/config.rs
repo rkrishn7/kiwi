@@ -1,7 +1,18 @@
-use std::{fs::File, io::Read};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs::File,
+    io::Read,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Context;
+use notify::{Event, RecommendedWatcher, Watcher};
 use serde::Deserialize;
+
+use crate::source::counter::build_source as build_counter_source;
+use crate::source::kafka::build_source as build_kafka_source;
+use crate::source::{Source, SourceId};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -79,7 +90,7 @@ pub struct Subscriber {
 }
 
 impl Config {
-    pub fn parse(path: &str) -> Result<Self, anyhow::Error> {
+    pub fn parse<P: AsRef<Path>>(path: P) -> Result<Self, anyhow::Error> {
         let mut file = File::open(path).context("failed to open kiwi config")?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -92,6 +103,82 @@ impl Config {
 
         Ok(config)
     }
+}
+
+pub fn reconcile_sources(
+    sources: &mut BTreeMap<SourceId, Box<dyn Source + Send + Sync>>,
+    config: &Config,
+) -> anyhow::Result<()> {
+    let mut seen = HashSet::new();
+
+    for typ in config.sources.iter() {
+        let incoming = match typ {
+            SourceType::Kafka { topic } => topic,
+            SourceType::Counter { id, .. } => id,
+        };
+
+        if !seen.insert(incoming) {
+            return Err(anyhow::anyhow!(
+                "Found duplicate source ID in configuration: {}",
+                incoming
+            ));
+        }
+
+        match sources.entry(incoming.clone()) {
+            std::collections::btree_map::Entry::Occupied(_) => {
+                // Source already exists
+                continue;
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                // Build and add source
+                let source = match typ {
+                    SourceType::Kafka { topic } => {
+                        if let Some(kafka_config) = config.kafka.as_ref() {
+                            build_kafka_source(
+                                topic.clone(),
+                                &kafka_config.bootstrap_servers,
+                                &kafka_config.group_id_prefix,
+                            )?
+                        } else {
+                            return Err(anyhow::anyhow!(
+                                "Kafka source specified but no Kafka configuration found"
+                            ));
+                        }
+                    }
+                    SourceType::Counter {
+                        id,
+                        min,
+                        max,
+                        interval_ms,
+                        lazy,
+                    } => build_counter_source(
+                        id.clone(),
+                        *min,
+                        *max,
+                        std::time::Duration::from_millis(*interval_ms),
+                        *lazy,
+                    ),
+                };
+
+                tracing::info!("Built source from configuration: {}", source.source_id());
+                entry.insert(source);
+            }
+        };
+    }
+
+    sources.retain(|id, _| {
+        if !config.sources.iter().any(|typ| match typ {
+            SourceType::Kafka { topic } => topic == id,
+            SourceType::Counter { id: incoming, .. } => incoming == id,
+        }) {
+            tracing::info!("Removing source due to configuration change: {}", id);
+            false
+        } else {
+            true
+        }
+    });
+
+    Ok(())
 }
 
 #[cfg(test)]
