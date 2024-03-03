@@ -110,11 +110,8 @@ fn init_config_watcher<P: AsRef<Path> + Clone + Send + 'static>(
     let mut watcher = RecommendedWatcher::new(
         move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res {
-                match event.kind {
-                    notify::EventKind::Modify(_) => {
-                        tx.send(()).expect("config update channel closed");
-                    }
-                    _ => (),
+                if event.kind.is_modify() {
+                    tx.send(()).expect("config update channel closed");
                 }
             }
         },
