@@ -6,10 +6,9 @@ use std::sync::Mutex;
 
 use clap::Parser;
 
-use kiwi::config::reconcile_sources;
 use kiwi::config::Config;
+use kiwi::config::ConfigReconciler;
 use kiwi::hook::wasm::{WasmAuthenticateHook, WasmInterceptHook};
-use kiwi::source;
 use kiwi::source::kafka::start_partition_discovery;
 use kiwi::source::Source;
 use kiwi::source::SourceId;
@@ -47,7 +46,9 @@ async fn main() -> anyhow::Result<()> {
     let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
 
-    reconcile_sources(&mut sources.lock().expect("poisoned lock"), &config)?;
+    let config_reconciler: ConfigReconciler = ConfigReconciler::new(Arc::clone(&sources));
+
+    config_reconciler.reconcile_sources(&config)?;
 
     if let Some(kafka_config) = config.kafka.as_ref() {
         if kafka_config.partition_discovery_enabled {
@@ -61,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let _watcher = init_config_watcher(Arc::clone(&sources), &args)?;
+    let _watcher = init_config_watcher(config_reconciler, args.config)?;
 
     let adapter_path = config
         .hooks
@@ -100,9 +101,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_config_watcher(
-    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>>,
-    args: &Args,
+fn init_config_watcher<P: AsRef<Path> + Clone + Send + 'static>(
+    config_reconciler: ConfigReconciler,
+    path: P,
 ) -> anyhow::Result<RecommendedWatcher> {
     let (tx, mut rx) = tokio::sync::watch::channel(());
 
@@ -120,24 +121,25 @@ fn init_config_watcher(
         notify::Config::default(),
     )?;
 
-    let path = args.config.clone();
+    tokio::spawn({
+        let path = path.clone();
+        async move {
+            while rx.changed().await.is_ok() {
+                if let Err(e) = Config::parse(&path)
+                    .and_then(|config| config_reconciler.reconcile_sources(&config))
+                {
+                    tracing::error!("Failed to reload config: {}", e);
+                    continue;
+                }
 
-    tokio::spawn(async move {
-        while rx.changed().await.is_ok() {
-            if let Err(e) = Config::parse(&path).and_then(|config| {
-                reconcile_sources(&mut sources.lock().expect("poisoned lock"), &config)
-            }) {
-                tracing::error!("Failed to reload config: {}", e);
-                continue;
+                tracing::info!("Configuration changes applied");
             }
 
-            tracing::info!("Configuration changes applied");
+            tracing::error!("config update sender dropped");
         }
-
-        tracing::error!("config update sender dropped");
     });
 
-    watcher.watch(args.config.as_ref(), notify::RecursiveMode::NonRecursive)?;
+    watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
 
     Ok(watcher)
 }

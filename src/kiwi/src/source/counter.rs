@@ -144,14 +144,16 @@ impl CounterTask {
     }
 }
 
-pub fn build_source(
-    id: String,
-    min: u64,
-    max: Option<u64>,
-    interval: std::time::Duration,
-    lazy: bool,
-) -> Box<dyn Source + Send + Sync + 'static> {
-    Box::new(CounterSource::new(id, min, max, interval, lazy))
+pub trait CounterSourceBuilder {
+    fn build_source(
+        id: String,
+        min: u64,
+        max: Option<u64>,
+        interval: std::time::Duration,
+        lazy: bool,
+    ) -> Box<dyn Source + Send + Sync + 'static> {
+        Box::new(CounterSource::new(id, min, max, interval, lazy))
+    }
 }
 
 #[cfg(test)]

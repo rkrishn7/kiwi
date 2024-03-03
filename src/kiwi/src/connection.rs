@@ -285,7 +285,7 @@ where
             event: plugin_event_ctx,
         };
 
-        let action = if let Some(plugin) = self.intercept.clone() {
+        let action = if let Some(plugin) = self.intercept.as_ref() {
             plugin.intercept(&plugin_ctx).await?
         } else {
             intercept::types::Action::Forward
