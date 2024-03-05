@@ -53,6 +53,8 @@ pub mod hook;
 #[doc(hidden)]
 pub mod wit {
     #![allow(missing_docs)]
+    #![allow(clippy::missing_safety_doc)]
+    #![allow(clippy::transmute_int_to_bool)]
 
     wit_bindgen::generate!({
         path: "./wit",
