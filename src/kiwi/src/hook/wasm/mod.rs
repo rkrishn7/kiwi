@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use http::Request as HttpRequest;
@@ -113,33 +112,70 @@ pub(super) fn create_instance_pre<P: AsRef<Path>>(
     Ok(instance_pre)
 }
 
-#[derive(Clone)]
-pub struct WasmAuthenticateHook {
-    instance_pre: Arc<InstancePre<Host>>,
+pub trait WasmHook {
+    /// Create a new instance of the hook from a file
+    fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self>
+    where
+        Self: Sized;
+    /// Path to the WebAssembly module
+    fn path(&self) -> &std::path::Path;
+    /// Path to the adapter module
+    fn adapter_path(&self) -> Option<&std::path::Path>;
 }
 
-impl WasmAuthenticateHook {
-    pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
+pub struct WasmAuthenticateHook {
+    instance_pre: InstancePre<Host>,
+    path: std::path::PathBuf,
+    adapter_path: Option<std::path::PathBuf>,
+}
+
+impl WasmHook for WasmAuthenticateHook {
+    fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
+        let path = file.as_ref().to_path_buf();
+        let adapter_path = adapter.as_ref().map(|p| p.as_ref().to_path_buf());
         let instance_pre = create_instance_pre(WasmHookType::Authenticate, file, adapter)?;
 
         Ok(Self {
-            instance_pre: Arc::new(instance_pre),
+            instance_pre,
+            path,
+            adapter_path,
         })
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn adapter_path(&self) -> Option<&std::path::Path> {
+        self.adapter_path.as_deref()
     }
 }
 
-#[derive(Clone)]
 pub struct WasmInterceptHook {
-    instance_pre: Arc<InstancePre<Host>>,
+    instance_pre: InstancePre<Host>,
+    path: std::path::PathBuf,
+    adapter_path: Option<std::path::PathBuf>,
 }
 
-impl WasmInterceptHook {
-    pub fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
+impl WasmHook for WasmInterceptHook {
+    fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
+        let path = file.as_ref().to_path_buf();
+        let adapter_path = adapter.as_ref().map(|p| p.as_ref().to_path_buf());
         let instance_pre = create_instance_pre(WasmHookType::Intercept, file, adapter)?;
 
         Ok(Self {
-            instance_pre: Arc::new(instance_pre),
+            instance_pre,
+            path,
+            adapter_path,
         })
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn adapter_path(&self) -> Option<&std::path::Path> {
+        self.adapter_path.as_deref()
     }
 }
 

@@ -1,19 +1,16 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use arc_swap::ArcSwapOption;
 use clap::Parser;
 
 use kiwi::config::Config;
 use kiwi::config::ConfigReconciler;
-use kiwi::hook::wasm::{WasmAuthenticateHook, WasmInterceptHook};
 use kiwi::source::kafka::start_partition_discovery;
 use kiwi::source::Source;
 use kiwi::source::SourceId;
-use notify::RecommendedWatcher;
-use notify::Watcher;
 
 /// kiwi is a bridge between your backend services and front-end applications.
 /// It seamlessly and efficiently manages the flow of real-time Kafka events
@@ -46,9 +43,17 @@ async fn main() -> anyhow::Result<()> {
     let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
 
-    let config_reconciler: ConfigReconciler = ConfigReconciler::new(Arc::clone(&sources));
+    let intercept = Arc::new(ArcSwapOption::new(None));
+    let authenticate = Arc::new(ArcSwapOption::new(None));
+
+    let config_reconciler: ConfigReconciler = ConfigReconciler::new(
+        Arc::clone(&sources),
+        Arc::clone(&intercept),
+        Arc::clone(&authenticate),
+    );
 
     config_reconciler.reconcile_sources(&config)?;
+    config_reconciler.reconcile_hooks(&config)?;
 
     if let Some(kafka_config) = config.kafka.as_ref() {
         if kafka_config.partition_discovery_enabled {
@@ -62,81 +67,25 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let _watcher = init_config_watcher(config_reconciler, args.config)?;
-
-    let adapter_path = config
-        .hooks
-        .as_ref()
-        .and_then(|c| c.__adapter_path.as_ref());
-
-    let intercept_hook = config
-        .hooks
-        .as_ref()
-        .and_then(|hooks| hooks.intercept.clone())
-        .map(|path| {
-            WasmInterceptHook::from_file(path, adapter_path.cloned())
-                .expect("failed to load intercept wasm hook")
-        });
-
-    let authenticate_hook = config
-        .hooks
-        .as_ref()
-        .and_then(|hooks| hooks.authenticate.clone())
-        .map(|path| {
-            WasmAuthenticateHook::from_file(path, adapter_path.cloned())
-                .expect("failed to load authenticate wasm hook")
-        });
+    tokio::spawn(async move {
+        if let Err(e) = config_reconciler.watch(config_path.into()).await {
+            tracing::error!(
+                "Configuration watcher exited unexpectedly with the error: {}",
+                e
+            );
+        }
+    });
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
     kiwi::ws::serve(
         &listen_addr,
         sources,
-        intercept_hook,
-        authenticate_hook,
+        intercept,
+        authenticate,
         config.subscriber,
     )
     .await?;
 
     Ok(())
-}
-
-fn init_config_watcher<P: AsRef<Path> + Clone + Send + 'static>(
-    config_reconciler: ConfigReconciler,
-    path: P,
-) -> anyhow::Result<RecommendedWatcher> {
-    let (tx, mut rx) = tokio::sync::watch::channel(());
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                if event.kind.is_modify() {
-                    tx.send(()).expect("config update channel closed");
-                }
-            }
-        },
-        notify::Config::default(),
-    )?;
-
-    tokio::spawn({
-        let path = path.clone();
-        async move {
-            while rx.changed().await.is_ok() {
-                if let Err(e) = Config::parse(&path)
-                    .and_then(|config| config_reconciler.reconcile_sources(&config))
-                {
-                    tracing::error!("Failed to reload config: {}", e);
-                    continue;
-                }
-
-                tracing::info!("Configuration changes applied");
-            }
-
-            tracing::error!("config update sender dropped");
-        }
-    });
-
-    watcher.watch(path.as_ref(), notify::RecursiveMode::NonRecursive)?;
-
-    Ok(watcher)
 }
