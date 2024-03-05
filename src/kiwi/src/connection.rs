@@ -2,6 +2,7 @@ use std::collections::{btree_map, BTreeMap};
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
+use arc_swap::ArcSwapOption;
 use futures::stream::select_all::select_all;
 use futures::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -32,7 +33,7 @@ pub struct ConnectionManager<I> {
     /// Custom context provided by the authentication hook
     auth_ctx: Option<intercept::types::AuthCtx>,
     /// Plugin that is executed before forwarding events to the client
-    intercept: Option<I>,
+    intercept: Arc<ArcSwapOption<I>>,
     /// Subscriber configuration that applies to all subscriptions managed
     /// by this actor
     subscriber_config: SubscriberConfig,
@@ -54,7 +55,7 @@ enum ConnectionManagerState<T> {
 
 impl<I> ConnectionManager<I>
 where
-    I: Intercept + Clone + Send + 'static,
+    I: Intercept + Send + 'static,
 {
     pub fn new(
         sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
@@ -62,7 +63,7 @@ where
         msg_tx: UnboundedSender<Message>,
         connection_ctx: intercept::types::ConnectionCtx,
         auth_ctx: Option<intercept::types::AuthCtx>,
-        intercept: Option<I>,
+        intercept: Arc<ArcSwapOption<I>>,
         subscriber_config: SubscriberConfig,
     ) -> Self {
         Self {
@@ -285,7 +286,7 @@ where
             event: plugin_event_ctx,
         };
 
-        let action = if let Some(plugin) = self.intercept.clone() {
+        let action = if let Some(plugin) = self.intercept.load().as_ref() {
             plugin.intercept(&plugin_ctx).await?
         } else {
             intercept::types::Action::Forward
@@ -459,7 +460,7 @@ mod tests {
                 addr: "127.0.0.1:8000".parse().unwrap(),
             }),
             None,
-            pre_forward,
+            Arc::new(ArcSwapOption::new(pre_forward.map(|p| Arc::new(p)))),
             subscriber_config.unwrap_or_default(),
         );
 

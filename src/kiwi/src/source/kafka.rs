@@ -338,7 +338,8 @@ pub fn start_partition_discovery(
     let client = create_metadata_client(bootstrap_servers)?;
 
     std::thread::spawn(move || loop {
-        // Temporary MutexGuard dropped at the end of this statement
+        std::thread::sleep(poll_interval);
+
         let topics = topic_sources
             .lock()
             .expect("poisoned lock")
@@ -371,23 +372,23 @@ pub fn start_partition_discovery(
                 }
             }
         }
-
-        std::thread::sleep(poll_interval);
     });
 
     Ok(())
 }
 
-pub fn build_source(
-    topic: String,
-    bootstrap_servers: &[String],
-    group_id_prefix: &str,
-) -> anyhow::Result<Box<dyn Source + Send + Sync + 'static>> {
-    Ok(Box::new(KafkaTopicSource::new(
-        topic,
-        bootstrap_servers,
-        group_id_prefix,
-    )?))
+pub trait KafkaSourceBuilder {
+    fn build_source(
+        topic: String,
+        bootstrap_servers: &[String],
+        group_id_prefix: &str,
+    ) -> anyhow::Result<Box<dyn Source + Send + Sync + 'static>> {
+        Ok(Box::new(KafkaTopicSource::new(
+            topic,
+            bootstrap_servers,
+            group_id_prefix,
+        )?))
+    }
 }
 
 impl From<OwnedMessage> for SourceResult {

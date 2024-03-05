@@ -2,6 +2,8 @@ use tokio::sync::broadcast::Receiver;
 
 use crate::hook;
 
+use self::{counter::CounterSourceBuilder, kafka::KafkaSourceBuilder};
+
 pub mod counter;
 pub mod kafka;
 
@@ -47,3 +49,8 @@ impl From<SourceResult> for hook::intercept::types::EventCtx {
         }
     }
 }
+
+pub struct SourceBuilder;
+
+impl KafkaSourceBuilder for SourceBuilder {}
+impl CounterSourceBuilder for SourceBuilder {}

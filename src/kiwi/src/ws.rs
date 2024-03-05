@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::{net::SocketAddr, sync::Arc};
 
+use arc_swap::ArcSwapOption;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -26,13 +27,13 @@ use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMe
 pub async fn serve<I, A>(
     listen_addr: &SocketAddr,
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
-    intercept_hook: Option<I>,
-    authenticate_hook: Option<A>,
+    intercept: Arc<ArcSwapOption<I>>,
+    authenticate: Arc<ArcSwapOption<A>>,
     subscriber_config: crate::config::Subscriber,
 ) -> anyhow::Result<()>
 where
-    I: Intercept + Clone + Send + Sync + 'static,
-    A: Authenticate + Clone + Send + Sync + Unpin + 'static,
+    I: Intercept + Send + Sync + 'static,
+    A: Authenticate + Send + Sync + Unpin + 'static,
 {
     // TODO: Support TLS
     let listener = TcpListener::bind(listen_addr).await?;
@@ -40,11 +41,11 @@ where
 
     while let Ok((stream, addr)) = listener.accept().await {
         let sources = Arc::clone(&sources);
-        let intercept_hook = intercept_hook.clone();
-        let authenticate_hook = authenticate_hook.clone();
+        let intercept = intercept.clone();
+        let authenticate = authenticate.clone();
         let subscriber_config = subscriber_config.clone();
         tokio::spawn(async move {
-            match perform_handshake(stream, authenticate_hook).await {
+            match perform_handshake(stream, authenticate).await {
                 Ok((mut ws_stream, auth_ctx)) => {
                     tracing::info!(ip = ?addr, "New WebSocket connection");
 
@@ -55,7 +56,7 @@ where
                         sources,
                         auth_ctx,
                         connection_ctx,
-                        intercept_hook,
+                        intercept,
                         subscriber_config,
                     )
                     .await;
@@ -78,7 +79,7 @@ where
 
 async fn perform_handshake<S, A>(
     stream: S,
-    authenticate_hook: Option<A>,
+    authenticate: Arc<ArcSwapOption<A>>,
 ) -> anyhow::Result<(WebSocketStream<S>, Option<AuthCtx>)>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -93,7 +94,7 @@ where
         |req: &Request, res: Response| {
             let request = req.clone();
 
-            if let Some(hook) = authenticate_hook {
+            if let Some(hook) = authenticate.load().as_ref() {
                 // The callback implemented by tokio-tungstenite is not async, which makes
                 // it difficult to invoke async code from within it. Ultimately, we need
                 // to block the current thread to run the async code. While it's not ideal,
@@ -138,12 +139,12 @@ async fn drive_stream<S, I>(
     sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     auth_ctx: Option<AuthCtx>,
     connection_ctx: ConnectionCtx,
-    intercept_hook: Option<I>,
+    intercept: Arc<ArcSwapOption<I>>,
     subscriber_config: crate::config::Subscriber,
 ) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
-    I: Intercept + Clone + Send + Sync + 'static,
+    I: Intercept + Send + Sync + 'static,
 {
     let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
@@ -154,7 +155,7 @@ where
         msg_tx,
         connection_ctx.clone(),
         auth_ctx,
-        intercept_hook,
+        intercept,
         subscriber_config,
     );
 

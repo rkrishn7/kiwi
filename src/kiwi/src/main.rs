@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use arc_swap::ArcSwapOption;
 use clap::Parser;
 
-use kiwi::config::{Config, SourceType};
-use kiwi::hook::wasm::{WasmAuthenticateHook, WasmInterceptHook};
-use kiwi::source::counter::build_source as build_counter_source;
-use kiwi::source::kafka::{build_source as build_kafka_source, start_partition_discovery};
+use kiwi::config::Config;
+use kiwi::config::ConfigReconciler;
+use kiwi::source::kafka::start_partition_discovery;
 use kiwi::source::Source;
 use kiwi::source::SourceId;
 
@@ -36,60 +36,24 @@ async fn main() -> anyhow::Result<()> {
         .with_max_level(args.log_level)
         .init();
 
-    let config = Config::parse(&args.config)?;
+    let config_path = args.config.clone();
+
+    let config = Config::parse(&config_path)?;
 
     let sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync>>>> =
         Arc::new(Mutex::new(BTreeMap::new()));
 
-    for source in config.sources.into_iter() {
-        let (source_id, source) = match source {
-            SourceType::Kafka { topic } => {
-                if let Some(kafka_config) = config.kafka.as_ref() {
-                    let source = build_kafka_source(
-                        topic.clone(),
-                        &kafka_config.bootstrap_servers,
-                        &kafka_config.group_id_prefix,
-                    )?;
+    let intercept = Arc::new(ArcSwapOption::new(None));
+    let authenticate = Arc::new(ArcSwapOption::new(None));
 
-                    (topic, source)
-                } else {
-                    return Err(anyhow::anyhow!(
-                        "Kafka source specified but no Kafka configuration found"
-                    ));
-                }
-            }
-            SourceType::Counter {
-                id,
-                min,
-                max,
-                interval_ms,
-                lazy,
-            } => {
-                let source = build_counter_source(
-                    id.clone(),
-                    min,
-                    max,
-                    std::time::Duration::from_millis(interval_ms),
-                    lazy,
-                );
+    let config_reconciler: ConfigReconciler = ConfigReconciler::new(
+        Arc::clone(&sources),
+        Arc::clone(&intercept),
+        Arc::clone(&authenticate),
+    );
 
-                (id, source)
-            }
-        };
-
-        match sources
-            .lock()
-            .expect("poisoned lock")
-            .entry(source_id.clone())
-        {
-            std::collections::btree_map::Entry::Occupied(_) => {
-                panic!("Found duplicate source ID in configuration: {}", source_id);
-            }
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(source);
-            }
-        }
-    }
+    config_reconciler.reconcile_sources(&config)?;
+    config_reconciler.reconcile_hooks(&config)?;
 
     if let Some(kafka_config) = config.kafka.as_ref() {
         if kafka_config.partition_discovery_enabled {
@@ -103,36 +67,22 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let adapter_path = config
-        .hooks
-        .as_ref()
-        .and_then(|c| c.__adapter_path.as_ref());
-
-    let intercept_hook = config
-        .hooks
-        .as_ref()
-        .and_then(|hooks| hooks.intercept.clone())
-        .map(|path| {
-            WasmInterceptHook::from_file(path, adapter_path.cloned())
-                .expect("failed to load intercept wasm hook")
-        });
-
-    let authenticate_hook = config
-        .hooks
-        .as_ref()
-        .and_then(|hooks| hooks.authenticate.clone())
-        .map(|path| {
-            WasmAuthenticateHook::from_file(path, adapter_path.cloned())
-                .expect("failed to load authenticate wasm hook")
-        });
+    tokio::spawn(async move {
+        if let Err(e) = config_reconciler.watch(config_path.into()).await {
+            tracing::error!(
+                "Configuration watcher exited unexpectedly with the error: {}",
+                e
+            );
+        }
+    });
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
     kiwi::ws::serve(
         &listen_addr,
         sources,
-        intercept_hook,
-        authenticate_hook,
+        intercept,
+        authenticate,
         config.subscriber,
     )
     .await?;
