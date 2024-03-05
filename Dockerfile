@@ -24,7 +24,7 @@ COPY . .
 RUN cargo build --release --locked --bin kiwi
 
 # Install the necessary WASI adapter module for the Kiwi hook runtime
-RUN curl -L https://github.com/bytecodealliance/wasmtime/releases/download/v17.0.0/wasi_snapshot_preview1.reactor.wasm \
+RUN curl -L https://github.com/bytecodealliance/wasmtime/releases/download/v18.0.2/wasi_snapshot_preview1.reactor.wasm \
     -o wasi_snapshot_preview1.wasm
 
 FROM debian:bookworm-slim
