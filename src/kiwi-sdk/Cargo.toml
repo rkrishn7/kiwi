@@ -11,5 +11,5 @@ description = "The Kiwi SDK allows you to write pluggable modules that hook into
 [dependencies]
 anyhow = "1.0.79"
 kiwi-macro = { version = "~0.1.1-alpha.7", path = "./macro" }
-wit-bindgen = "0.17.0"
+wit-bindgen = "0.21.0"
 http = "1.0.0"
