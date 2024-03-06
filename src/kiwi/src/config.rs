@@ -53,7 +53,7 @@ pub enum SourceType {
 impl SourceType {
     pub fn id(&self) -> &SourceId {
         match self {
-            SourceType::Kafka { id, topic } => id.as_ref().unwrap_or_else(|| topic),
+            SourceType::Kafka { id, topic } => id.as_ref().unwrap_or(topic),
             SourceType::Counter { id, .. } => id,
         }
     }
