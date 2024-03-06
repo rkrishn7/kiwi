@@ -119,6 +119,7 @@ impl PartitionConsumer {
 type ShutdownTrigger = oneshot::Sender<()>;
 
 pub struct KafkaTopicSource {
+    id: SourceId,
     topic: String,
     // Map of partition ID -> shutdown trigger
     _partition_consumers: Arc<Mutex<BTreeMap<i32, ShutdownTrigger>>>,
@@ -132,16 +133,21 @@ impl Source for KafkaTopicSource {
     }
 
     fn source_id(&self) -> &SourceId {
-        &self.topic
+        &self.id
     }
 
     fn metadata_tx(&self) -> &Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>> {
         &self.metadata_tx
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl KafkaTopicSource {
     pub fn new(
+        id: SourceId,
         topic: String,
         bootstrap_servers: &[String],
         group_id_prefix: &str,
@@ -197,6 +203,7 @@ impl KafkaTopicSource {
         let weak_tasks = Arc::downgrade(&consumer_tasks);
 
         let result = Self {
+            id,
             topic: topic.clone(),
             _partition_consumers: consumer_tasks,
             tx: tx.clone(),
@@ -332,7 +339,7 @@ fn fetch_partition_metadata(
 
 pub fn start_partition_discovery(
     bootstrap_servers: &[String],
-    topic_sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
+    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     poll_interval: Duration,
 ) -> anyhow::Result<()> {
     let client = create_metadata_client(bootstrap_servers)?;
@@ -340,21 +347,22 @@ pub fn start_partition_discovery(
     std::thread::spawn(move || loop {
         std::thread::sleep(poll_interval);
 
-        let topics = topic_sources
+        let kafka_sources = sources
             .lock()
             .expect("poisoned lock")
-            .keys()
-            .cloned()
+            .iter()
+            .filter_map(|(_, source)| {
+                source
+                    .as_any()
+                    .downcast_ref::<KafkaTopicSource>()
+                    .map(|source| (source.id.clone(), source.topic.clone()))
+            })
             .collect::<Vec<_>>();
 
-        for topic in topics.iter() {
+        for (id, topic) in kafka_sources.iter() {
             match fetch_partition_metadata(topic.as_str(), &client) {
                 Ok(metadata) => {
-                    if let Some(source) = topic_sources
-                        .lock()
-                        .expect("poisoned lock")
-                        .get(topic.as_str())
-                    {
+                    if let Some(source) = sources.lock().expect("poisoned lock").get(id) {
                         for partition_metadata in metadata {
                             let metadata_tx = source.metadata_tx();
 
@@ -379,11 +387,13 @@ pub fn start_partition_discovery(
 
 pub trait KafkaSourceBuilder {
     fn build_source(
+        id: SourceId,
         topic: String,
         bootstrap_servers: &[String],
         group_id_prefix: &str,
     ) -> anyhow::Result<Box<dyn Source + Send + Sync + 'static>> {
         Ok(Box::new(KafkaTopicSource::new(
+            id,
             topic,
             bootstrap_servers,
             group_id_prefix,

@@ -37,6 +37,8 @@ pub trait Source {
     fn source_id(&self) -> &SourceId;
 
     fn metadata_tx(&self) -> &Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>>;
+
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 pub type SourceId = String;
