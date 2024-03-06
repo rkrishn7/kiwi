@@ -379,6 +379,7 @@ mod tests {
 
     fn test_kafka_source_result() -> SourceResult {
         SourceResult::Kafka(crate::source::kafka::KafkaSourceResult {
+            id: "test".to_string(),
             key: None,
             payload: None,
             topic: "test".to_string(),
