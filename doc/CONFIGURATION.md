@@ -33,18 +33,25 @@ hooks:
 sources:
   - type: kafka
 
+    # The source ID for this counter source. The source ID is used as a unique identifier, thus must be
+    # distinct from other source IDs, regardless of type.
+    #
+    ## Optional (defaults to `topic`)
+    id: my-kafka-source
+
     # The topic name for this Kafka source. The source ID defaults to the topic name.
     #
     ## Required
     topic: 'my-topic'
 
   - type: counter
+
     # The source ID for this counter source. The source ID is used as a unique identifier, thus must be
     # distinct from other source IDs, regardless of type.
     #
     ## Required
-
     id: counter1
+
     # The interval at which the counter source emits events
     #
     ## Required
