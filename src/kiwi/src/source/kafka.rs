@@ -162,7 +162,7 @@ impl KafkaTopicSource {
         client_config.extend(btreemap! {
             "group.id".to_string() => group_id,
             // We don't care about offset committing, since we are just relaying the latest messages.
-            "enable.auto.commit".to_string() => "false".to_string(),
+            "enable.auto.commit".to_string() => "true".to_string(),
             "enable.partition.eof".to_string() => "false".to_string(),
             // A friendly label to present to Kafka
             "client.id".to_string() => "kiwi".to_string(),
