@@ -36,10 +36,11 @@ pub struct Config {
 #[serde(rename_all = "lowercase")]
 pub enum SourceType {
     Kafka {
+        id: Option<SourceId>,
         topic: String,
     },
     Counter {
-        id: String,
+        id: SourceId,
         min: u64,
         #[serde(default)]
         max: Option<u64>,
@@ -47,6 +48,15 @@ pub enum SourceType {
         #[serde(default)]
         lazy: bool,
     },
+}
+
+impl SourceType {
+    pub fn id(&self) -> &SourceId {
+        match self {
+            SourceType::Kafka { id, topic } => id.as_ref().unwrap_or(topic),
+            SourceType::Counter { id, .. } => id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -315,19 +325,16 @@ impl<A: WasmHook, B: KafkaSourceBuilder + CounterSourceBuilder, I: WasmHook>
         let mut seen = HashSet::new();
 
         for typ in config.sources.iter() {
-            let incoming = match typ {
-                SourceType::Kafka { topic } => topic,
-                SourceType::Counter { id, .. } => id,
-            };
+            let id_incoming = typ.id();
 
-            if !seen.insert(incoming) {
+            if !seen.insert(id_incoming) {
                 return Err(anyhow::anyhow!(
                     "Found duplicate source ID in configuration: {}",
-                    incoming
+                    id_incoming
                 ));
             }
 
-            match sources.entry(incoming.clone()) {
+            match sources.entry(id_incoming.clone()) {
                 std::collections::btree_map::Entry::Occupied(_) => {
                     // Source already exists
                     continue;
@@ -335,9 +342,10 @@ impl<A: WasmHook, B: KafkaSourceBuilder + CounterSourceBuilder, I: WasmHook>
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     // Build and add source
                     let source = match typ {
-                        SourceType::Kafka { topic } => {
+                        SourceType::Kafka { topic, .. } => {
                             if let Some(kafka_config) = config.kafka.as_ref() {
                                 <B as KafkaSourceBuilder>::build_source(
+                                    typ.id().clone(),
                                     topic.clone(),
                                     &kafka_config.bootstrap_servers,
                                     &kafka_config.group_id_prefix,
@@ -370,10 +378,7 @@ impl<A: WasmHook, B: KafkaSourceBuilder + CounterSourceBuilder, I: WasmHook>
         }
 
         sources.retain(|id, _| {
-            if !config.sources.iter().any(|typ| match typ {
-                SourceType::Kafka { topic } => topic == id,
-                SourceType::Counter { id: incoming, .. } => incoming == id,
-            }) {
+            if !config.sources.iter().any(|typ| typ.id() == id) {
                 tracing::info!("Removing source due to configuration change: {}", id);
                 false
             } else {
@@ -458,8 +463,9 @@ mod tests {
 
         assert!(config.sources.len() == 2);
         assert!(
-            matches!(config.sources[0].clone(), SourceType::Kafka { topic } if topic == "test")
+            matches!(config.sources[0].clone(), SourceType::Kafka { topic, .. } if topic == "test")
         );
+        assert_eq!(config.sources[0].id(), "test");
 
         assert!(matches!(
             config.sources[1].clone(),
@@ -496,6 +502,18 @@ mod tests {
                 max,
             } if id == "test" && min == 0 && interval_ms == 100 && lazy && max == Some(100)
         ));
+
+        let config = "
+        sources:
+            - type: kafka
+              topic: topic1
+              id: test
+        server:
+            address: '127.0.0.1:8000'
+        ";
+
+        let config = Config::from_str(config).unwrap();
+        assert_eq!(config.sources[0].id(), "test");
     }
 
     #[test]
@@ -554,6 +572,10 @@ mod tests {
         ) -> &Option<tokio::sync::mpsc::UnboundedSender<crate::source::SourceMetadata>> {
             &None
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     struct TestWasmHook;
@@ -591,7 +613,8 @@ mod tests {
 
     impl KafkaSourceBuilder for TestSourceBuilder {
         fn build_source(
-            topic: SourceId,
+            _id: SourceId,
+            topic: String,
             _bootstrap_servers: &[String],
             _group_id_prefix: &str,
         ) -> Result<Box<dyn Source + Send + Sync>, anyhow::Error> {
@@ -619,6 +642,7 @@ mod tests {
                 },
                 SourceType::Kafka {
                     topic: "test".into(),
+                    id: None,
                 },
             ],
             hooks: None,
@@ -644,6 +668,7 @@ mod tests {
         let config = Config {
             sources: vec![SourceType::Kafka {
                 topic: "test".into(),
+                id: None,
             }],
             hooks: None,
             server: Server {
@@ -658,6 +683,7 @@ mod tests {
         let config = Config {
             sources: vec![SourceType::Kafka {
                 topic: "test".into(),
+                id: None,
             }],
             hooks: None,
             server: Server {
@@ -727,6 +753,7 @@ mod tests {
             "topic1".into(),
             <TestSourceBuilder as KafkaSourceBuilder>::build_source(
                 "topic1".into(),
+                "topic1".into(),
                 &["localhost:9092".into()],
                 "kiwi-",
             )
@@ -774,6 +801,7 @@ mod tests {
         sources.lock().unwrap().insert(
             "topic1".into(),
             <TestSourceBuilder as KafkaSourceBuilder>::build_source(
+                "topic1".into(),
                 "topic1".into(),
                 &["localhost:9092".into()],
                 "kiwi-",

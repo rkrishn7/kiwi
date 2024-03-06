@@ -145,7 +145,7 @@ impl From<source::SourceResult> for SourceResult {
             source::SourceResult::Kafka(kafka) => Self::Kafka {
                 key: kafka.key,
                 payload: kafka.payload,
-                source_id: kafka.topic,
+                source_id: kafka.id,
                 partition: kafka.partition,
                 offset: kafka.offset,
                 timestamp: kafka.timestamp,

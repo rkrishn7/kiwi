@@ -357,6 +357,10 @@ mod tests {
         fn metadata_tx(&self) -> &Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>> {
             &None
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -375,6 +379,7 @@ mod tests {
 
     fn test_kafka_source_result() -> SourceResult {
         SourceResult::Kafka(crate::source::kafka::KafkaSourceResult {
+            id: "test".to_string(),
             key: None,
             payload: None,
             topic: "test".to_string(),

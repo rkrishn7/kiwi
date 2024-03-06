@@ -9,7 +9,6 @@ use maplit::btreemap;
 use rdkafka::client::{Client, DefaultClientContext};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
-    message::OwnedMessage,
     ClientConfig,
 };
 use rdkafka::{Message, TopicPartitionList};
@@ -24,11 +23,13 @@ use super::{Source, SourceId, SourceMessage, SourceMetadata, SourceResult, Subsc
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KafkaSourceResult {
+    /// Source ID
+    pub id: SourceId,
     /// Event key
     pub key: Option<Vec<u8>>,
     /// Event payload
     pub payload: Option<Vec<u8>>,
-    /// Source ID this event was produced from
+    /// Topic this event was produced from
     pub topic: String,
     /// Timestamp at which the message was produced
     pub timestamp: Option<i64>,
@@ -44,6 +45,7 @@ pub struct KafkaSourceMetadata {
 }
 
 pub struct PartitionConsumer {
+    source_id: SourceId,
     consumer: StreamConsumer,
     shutdown_rx: Fuse<oneshot::Receiver<()>>,
     tx: Sender<SourceMessage>,
@@ -51,6 +53,7 @@ pub struct PartitionConsumer {
 
 impl PartitionConsumer {
     pub fn new<'a>(
+        source_id: SourceId,
         topic: &'a str,
         partition: i32,
         offset: rdkafka::Offset,
@@ -77,6 +80,7 @@ impl PartitionConsumer {
         ))?;
 
         Ok(Self {
+            source_id,
             consumer,
             shutdown_rx,
             tx,
@@ -104,7 +108,15 @@ impl PartitionConsumer {
                                     // An error here does not mean future calls will fail, since new subscribers
                                     // may be created. If there are no subscribers, we simply discard the message
                                     // and move on
-                                    let _ = self.tx.send(SourceMessage::Result(owned_message.into()));
+                                    let _ = self.tx.send(SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                                        id: self.source_id.clone(),
+                                        key: owned_message.key().map(|k| k.to_owned()),
+                                        payload: owned_message.payload().map(|p| p.to_owned()),
+                                        topic: owned_message.topic().to_string(),
+                                        timestamp: owned_message.timestamp().to_millis(),
+                                        partition: owned_message.partition(),
+                                        offset: owned_message.offset(),
+                                    })));
                                 }
                             };
                         },
@@ -119,6 +131,7 @@ impl PartitionConsumer {
 type ShutdownTrigger = oneshot::Sender<()>;
 
 pub struct KafkaTopicSource {
+    id: SourceId,
     topic: String,
     // Map of partition ID -> shutdown trigger
     _partition_consumers: Arc<Mutex<BTreeMap<i32, ShutdownTrigger>>>,
@@ -132,16 +145,21 @@ impl Source for KafkaTopicSource {
     }
 
     fn source_id(&self) -> &SourceId {
-        &self.topic
+        &self.id
     }
 
     fn metadata_tx(&self) -> &Option<tokio::sync::mpsc::UnboundedSender<SourceMetadata>> {
         &self.metadata_tx
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl KafkaTopicSource {
     pub fn new(
+        id: SourceId,
         topic: String,
         bootstrap_servers: &[String],
         group_id_prefix: &str,
@@ -174,6 +192,7 @@ impl KafkaTopicSource {
             let (shutdown_trigger, shutdown_rx) = oneshot::channel::<()>();
 
             let partition_consumer = PartitionConsumer::new(
+                id.clone(),
                 topic.as_str(),
                 partition_metadata.partition,
                 rdkafka::Offset::Offset(partition_metadata.hi_watermark),
@@ -197,6 +216,7 @@ impl KafkaTopicSource {
         let weak_tasks = Arc::downgrade(&consumer_tasks);
 
         let result = Self {
+            id: id.clone(),
             topic: topic.clone(),
             _partition_consumers: consumer_tasks,
             tx: tx.clone(),
@@ -224,6 +244,7 @@ impl KafkaTopicSource {
                                             oneshot::channel::<()>();
 
                                         match PartitionConsumer::new(
+                                            id.clone(),
                                             topic.as_str(),
                                             partition,
                                             rdkafka::Offset::Offset(hi_watermark),
@@ -332,7 +353,7 @@ fn fetch_partition_metadata(
 
 pub fn start_partition_discovery(
     bootstrap_servers: &[String],
-    topic_sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
+    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
     poll_interval: Duration,
 ) -> anyhow::Result<()> {
     let client = create_metadata_client(bootstrap_servers)?;
@@ -340,21 +361,22 @@ pub fn start_partition_discovery(
     std::thread::spawn(move || loop {
         std::thread::sleep(poll_interval);
 
-        let topics = topic_sources
+        let kafka_sources = sources
             .lock()
             .expect("poisoned lock")
-            .keys()
-            .cloned()
+            .iter()
+            .filter_map(|(_, source)| {
+                source
+                    .as_any()
+                    .downcast_ref::<KafkaTopicSource>()
+                    .map(|source| (source.id.clone(), source.topic.clone()))
+            })
             .collect::<Vec<_>>();
 
-        for topic in topics.iter() {
+        for (id, topic) in kafka_sources.iter() {
             match fetch_partition_metadata(topic.as_str(), &client) {
                 Ok(metadata) => {
-                    if let Some(source) = topic_sources
-                        .lock()
-                        .expect("poisoned lock")
-                        .get(topic.as_str())
-                    {
+                    if let Some(source) = sources.lock().expect("poisoned lock").get(id) {
                         for partition_metadata in metadata {
                             let metadata_tx = source.metadata_tx();
 
@@ -379,34 +401,17 @@ pub fn start_partition_discovery(
 
 pub trait KafkaSourceBuilder {
     fn build_source(
+        id: SourceId,
         topic: String,
         bootstrap_servers: &[String],
         group_id_prefix: &str,
     ) -> anyhow::Result<Box<dyn Source + Send + Sync + 'static>> {
         Ok(Box::new(KafkaTopicSource::new(
+            id,
             topic,
             bootstrap_servers,
             group_id_prefix,
         )?))
-    }
-}
-
-impl From<OwnedMessage> for SourceResult {
-    fn from(value: OwnedMessage) -> Self {
-        Self::Kafka(value.into())
-    }
-}
-
-impl From<OwnedMessage> for KafkaSourceResult {
-    fn from(value: OwnedMessage) -> Self {
-        Self {
-            key: value.key().map(|k| k.to_owned()),
-            payload: value.payload().map(|p| p.to_owned()),
-            topic: value.topic().to_string(),
-            timestamp: value.timestamp().to_millis(),
-            partition: value.partition(),
-            offset: value.offset(),
-        }
     }
 }
 

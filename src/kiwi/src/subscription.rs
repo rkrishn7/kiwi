@@ -190,6 +190,7 @@ mod tests {
         let mut stream = subscription.source_stream();
 
         let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            id: "test".into(),
             partition: 0,
             offset: 0,
             topic: "test".into(),
@@ -233,6 +234,7 @@ mod tests {
 
         for _ in 0..2 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -260,6 +262,7 @@ mod tests {
 
         for _ in 0..2 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -325,6 +328,7 @@ mod tests {
 
         for _ in 0..5 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -354,6 +358,7 @@ mod tests {
 
         for _ in 0..5 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -380,6 +385,7 @@ mod tests {
 
         // Pass another message through the stream to trigger a subsequent poll
         let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            id: "test".into(),
             partition: 0,
             offset: -1,
             topic: "test".into(),
@@ -414,6 +420,7 @@ mod tests {
 
         for _ in 0..5 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -440,6 +447,7 @@ mod tests {
 
         // Pass another message through the stream to trigger a subsequent poll
         let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            id: "test".into(),
             partition: 0,
             offset: -1,
             topic: "test".into(),
@@ -488,6 +496,7 @@ mod tests {
 
         for _ in 0..5 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -516,6 +525,7 @@ mod tests {
         pull.add_requests(1);
 
         let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            id: "test".into(),
             partition: 0,
             offset: 0,
             topic: "test".into(),
@@ -552,6 +562,7 @@ mod tests {
 
         for _ in 0..3 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -578,6 +589,7 @@ mod tests {
 
         // Pass another message through the stream to trigger a subsequent poll
         let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            id: "test".into(),
             partition: 0,
             offset: -1,
             topic: "test".into(),
@@ -618,6 +630,7 @@ mod tests {
 
         for _ in 0..6 {
             let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+                id: "test".into(),
                 partition: 0,
                 offset: 0,
                 topic: "test".into(),
@@ -635,6 +648,7 @@ mod tests {
         ));
 
         let message = SourceMessage::Result(SourceResult::Kafka(KafkaSourceResult {
+            id: "test".into(),
             partition: 0,
             offset: 0,
             topic: "test".into(),

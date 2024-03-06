@@ -177,7 +177,7 @@ server:
     let admin_client = create_admin_client();
     create_topic("topic1", &admin_client).await;
 
-    let mut proc = start_kiwi(config.path().to_str().unwrap())?;
+    let mut proc: process::Child = start_kiwi(config.path().to_str().unwrap())?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -236,6 +236,113 @@ server:
             assert_eq!(source_id, "topic1".to_string());
         }
         _ => panic!("Expected subscribe closed"),
+    }
+
+    let _ = proc.kill();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_prioritizes_source_id() -> anyhow::Result<()> {
+    let config = create_temp_config(
+        r#"
+sources:
+    - type: kafka
+      id: my-kafka-source
+      topic: topic1
+
+kafka:
+    partition_discovery_enabled: false
+    bootstrap_servers:
+        - 'kafka:19092'
+server:
+    address: '127.0.0.1:8000'
+    "#,
+    )
+    .unwrap();
+
+    let admin_client = create_admin_client();
+    create_topic("topic1", &admin_client).await;
+
+    let mut proc: process::Child = start_kiwi(config.path().to_str().unwrap())?;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let (ws_stream, _) = connect_async("ws://127.0.0.1:8000")
+        .await
+        .expect("Failed to connect");
+
+    let (mut write, mut read) = ws_stream.split();
+
+    let cmd = Command::Subscribe {
+        source_id: "topic1".into(),
+        mode: SubscriptionMode::Push,
+    };
+
+    write
+        .send(tungstenite::protocol::Message::Text(
+            serde_json::to_string(&cmd).unwrap(),
+        ))
+        .await?;
+
+    let resp = read.next().await.expect("Expected response")?;
+
+    let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
+
+    match resp {
+        Message::CommandResponse(CommandResponse::SubscribeError { source_id, .. }) => {
+            assert_eq!(source_id, "topic1".to_string());
+        }
+        _ => panic!("Expected subscribe error"),
+    }
+
+    let cmd = Command::Subscribe {
+        source_id: "my-kafka-source".into(),
+        mode: SubscriptionMode::Push,
+    };
+
+    write
+        .send(tungstenite::protocol::Message::Text(
+            serde_json::to_string(&cmd).unwrap(),
+        ))
+        .await?;
+
+    let resp = read.next().await.expect("Expected response")?;
+
+    let resp: Message = serde_json::from_str(&resp.to_text().unwrap())?;
+
+    match resp {
+        Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) => {
+            assert_eq!(source_id, "my-kafka-source".to_string());
+        }
+        _ => panic!("Expected subscribe ok"),
+    }
+
+    let producer: FutureProducer = rdkafka::config::ClientConfig::new()
+        .set("bootstrap.servers", "kafka:19092")
+        .set("message.timeout.ms", "5000")
+        .create()
+        .expect("Producer creation error");
+
+    let record = FutureRecord::to("topic1").payload("test").key("test");
+
+    producer
+        .send(record, Duration::from_secs(0))
+        .await
+        .expect("Failed to enqueue");
+
+    let msg = read.next().await.unwrap().unwrap();
+    let msg: Message = serde_json::from_str(&msg.to_text().unwrap()).unwrap();
+
+    match msg {
+        Message::Result(msg) => match msg {
+            kiwi::protocol::SourceResult::Kafka { source_id, .. } => {
+                assert_eq!(source_id.as_ref(), "my-kafka-source".to_string());
+            }
+            _ => panic!("Expected Kafka message. Received {:?}", msg),
+        },
+        m => panic!("Expected message. Received {:?}", m),
     }
 
     let _ = proc.kill();
