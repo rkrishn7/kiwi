@@ -50,3 +50,4 @@ workflows:
               test:
                 - "test_kafka_source"
                 - "test_closes_subscription_on_changed_metadata"
+                - "test_prioritizes_source_id"
