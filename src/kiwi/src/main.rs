@@ -78,14 +78,27 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr: SocketAddr = config.server.address.parse()?;
 
-    kiwi::ws::serve(
-        &listen_addr,
-        sources,
-        intercept,
-        authenticate,
-        config.subscriber,
-    )
-    .await?;
+    #[cfg(windows)]
+    let mut term = tokio::signal::windows::ctrl_close().unwrap();
+    #[cfg(unix)]
+    let mut term =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+
+    tokio::select! {
+        _ = term.recv() => {
+            tracing::info!("Received SIGTERM, shutting down");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received SIGINT, shutting down");
+        }
+        _ = kiwi::ws::serve(
+            &listen_addr,
+            sources,
+            intercept,
+            authenticate,
+            config.subscriber,
+        ) => {}
+    }
 
     Ok(())
 }
