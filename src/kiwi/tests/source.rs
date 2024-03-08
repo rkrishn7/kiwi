@@ -5,7 +5,7 @@ use std::time::Duration;
 use common::kafka::AdminClient;
 use common::kiwi::{ConfigFile, Process};
 use common::ws::Client as WsClient;
-use kiwi::protocol::{Command, CommandResponse, SubscriptionMode};
+use kiwi::protocol::{Command, CommandResponse, Message, SubscriptionMode};
 use once_cell::sync::Lazy;
 
 use crate::common::kafka::Producer;
@@ -50,9 +50,11 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
         })
         .await?;
 
-    let resp: CommandResponse = ws_client.recv_json().await?;
+    let resp: Message = ws_client.recv_json().await?;
 
-    assert!(matches!(resp, CommandResponse::SubscribeOk { source_id } if source_id == topic));
+    assert!(
+        matches!(resp, kiwi::protocol::Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) if source_id == topic)
+    );
 
     let producer = tokio::spawn({
         let topic = topic.clone();
