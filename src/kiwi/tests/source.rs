@@ -25,7 +25,7 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
             r#"
         sources:
             - type: kafka
-            topic: {topic}
+              topic: {topic}
 
         kafka:
             bootstrap_servers:
