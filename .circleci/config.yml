@@ -30,7 +30,6 @@ jobs:
       - run:
           name: Run Test
           command: |
-            echo 'Running: << parameters.module >>::<< parameters.test >>'
             NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
             echo Network: $NETWORK_NAME
             docker run --network $NETWORK_NAME \
@@ -40,6 +39,6 @@ jobs:
             cargo test --test 'source' -- --nocapture
 
 workflows:
-  kafka:
+  integration-tests:
     jobs:
       - source-test
