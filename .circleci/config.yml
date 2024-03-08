@@ -4,12 +4,7 @@ orbs:
   rust: circleci/rust@1.0.0
 
 jobs:
-  integration-test:
-    parameters:
-      module:
-        type: string
-      test:
-        type: string
+  source-test:
     machine:
       image: ubuntu-2004:current
       docker_layer_caching: true
@@ -38,16 +33,13 @@ jobs:
             echo 'Running: << parameters.module >>::<< parameters.test >>'
             NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
             echo Network: $NETWORK_NAME
-            docker run --network $NETWORK_NAME --name kiwi-tests kiwi:latest cargo test --test '<< parameters.module >>' -- --nocapture --test-threads 1 --test '<< parameters.test >>'
+            docker run --network $NETWORK_NAME \
+            --env 'BOOTSTRAP_SERVERS=kafka:19092' \
+            --name kiwi-tests \
+            kiwi:latest \
+            cargo test --test 'source' -- --nocapture
 
 workflows:
   kafka:
     jobs:
-      - integration-test:
-          matrix:
-            parameters:
-              module: ["kafka"]
-              test:
-                - "test_kafka_source"
-                - "test_closes_subscription_on_changed_metadata"
-                - "test_prioritizes_source_id"
+      - source-test

@@ -11,6 +11,8 @@ use kiwi::protocol::{Command, CommandResponse, Message, Notice, SubscriptionMode
 
 use tempfile::NamedTempFile;
 
+mod common;
+
 // Helper function to start the kiwi process.
 fn start_kiwi(config_file: &str) -> anyhow::Result<std::process::Child> {
     // Expects `kiwi` to be in the PATH
