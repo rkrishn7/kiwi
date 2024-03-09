@@ -159,7 +159,7 @@ async fn test_closes_subscription_on_partition_added() -> anyhow::Result<()> {
             source_id,
             message: _,
         }) => {
-            assert_eq!(source_id, "topic1".to_string());
+            assert_eq!(source_id, topic);
         }
         _ => panic!("Expected subscription closed notice"),
     }
@@ -294,7 +294,8 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
     config.as_file_mut().flush()?;
 
     // Close the file, without removing it from the filesystem
-    let _ = config.into_temp_path();
+    let tmp_path = config.into_temp_path();
+    tmp_path.keep()?;
 
     assert!(
         matches!(ws_client.recv_json().await?, kiwi::protocol::Message::Notice(Notice::SubscriptionClosed { source_id, .. }) if source_id == topic)
