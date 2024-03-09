@@ -275,6 +275,7 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
         matches!(resp, kiwi::protocol::Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) if source_id == topic)
     );
 
+    config.as_file_mut().set_len(0)?;
     config.as_file_mut().seek(SeekFrom::Start(0))?;
 
     config.as_file_mut().write_all(
