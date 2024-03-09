@@ -233,6 +233,8 @@ async fn test_named_kafka_source() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Tests removing a Kafka source from the configuration triggers a reconciliation
+/// of the sources and closes any outstanding subscriptions to the respective source
 #[tokio::test]
 async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
     let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
@@ -288,7 +290,11 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
         .as_bytes(),
     )?;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    config.as_file_mut().flush()?;
+
+    assert!(
+        matches!(ws_client.recv_json().await?, kiwi::protocol::Message::Notice(Notice::SubscriptionClosed { source_id, .. }) if source_id == topic)
+    );
 
     ws_client
         .send_json(&Command::Subscribe {
