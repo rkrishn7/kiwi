@@ -3,7 +3,7 @@ use http::Response;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{self, client::IntoClientRequest, Message},
+    tungstenite::{client::IntoClientRequest, Message},
     MaybeTlsStream, WebSocketStream,
 };
 

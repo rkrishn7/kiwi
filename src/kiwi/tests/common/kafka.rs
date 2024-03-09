@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use maplit::btreemap;
-use rdkafka::admin::{AdminClient as RdKafkaAdminClient, AdminOptions, NewPartitions, NewTopic};
+use rdkafka::admin::{AdminClient as RdKafkaAdminClient, AdminOptions, NewPartitions};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -47,6 +47,7 @@ impl AdminClient {
         Ok(topic)
     }
 
+    #[allow(dead_code)]
     pub async fn create_named_topic(
         &mut self,
         topic: &str,
@@ -162,16 +163,5 @@ impl Producer {
             .map_err(|(e, _)| anyhow::anyhow!("Failed to send message: {}", e))?;
 
         Ok(())
-    }
-
-    pub async fn send_json(
-        &self,
-        topic: &str,
-        key: &str,
-        value: &serde_json::Value,
-    ) -> anyhow::Result<()> {
-        let payload = serde_json::to_string(value)?;
-
-        self.send(topic, key, &payload).await
     }
 }

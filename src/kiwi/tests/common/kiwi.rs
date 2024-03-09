@@ -23,6 +23,7 @@ impl Process {
         self.proc.kill().expect("failed to kill kiwi process");
     }
 
+    #[allow(dead_code)]
     pub fn signal(&mut self, signal: Signal) {
         signal::kill(Pid::from_raw(self.proc.id().try_into().unwrap()), signal)
             .expect("failed to send signal to kiwi process");
@@ -47,10 +48,6 @@ impl ConfigFile {
             .context("failed to write config to temporary file")?;
 
         Ok(Self { inner: file })
-    }
-
-    pub fn as_file(&self) -> &std::fs::File {
-        self.inner.as_file()
     }
 
     pub fn as_file_mut(&mut self) -> &std::fs::File {
