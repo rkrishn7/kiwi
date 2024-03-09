@@ -56,3 +56,4 @@ workflows:
             parameters:
               module:
                 - kafka
+                - lifecycle

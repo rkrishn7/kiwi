@@ -47,7 +47,6 @@ impl AdminClient {
         Ok(topic)
     }
 
-    #[allow(dead_code)]
     pub async fn create_named_topic(
         &mut self,
         topic: &str,

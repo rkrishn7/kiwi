@@ -23,10 +23,18 @@ impl Process {
         self.proc.kill().expect("failed to kill kiwi process");
     }
 
-    #[allow(dead_code)]
-    pub fn signal(&mut self, signal: Signal) {
-        signal::kill(Pid::from_raw(self.proc.id().try_into().unwrap()), signal)
-            .expect("failed to send signal to kiwi process");
+    pub fn signal(&self, signal: Signal) -> anyhow::Result<()> {
+        signal::kill(Pid::from_raw(self.proc.id().try_into().unwrap()), signal)?;
+
+        Ok(())
+    }
+
+    pub fn proc(&self) -> &std::process::Child {
+        &self.proc
+    }
+
+    pub fn proc_mut(&mut self) -> &mut std::process::Child {
+        &mut self.proc
     }
 }
 
