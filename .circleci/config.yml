@@ -4,7 +4,7 @@ orbs:
   rust: circleci/rust@1.0.0
 
 jobs:
-  source-test:
+  kafka-source-test:
     machine:
       image: ubuntu-2004:current
       docker_layer_caching: true
@@ -35,9 +35,9 @@ jobs:
             --env 'BOOTSTRAP_SERVERS=kafka:19092' \
             --name kiwi-tests \
             kiwi:latest \
-            cargo test --test 'source' -- --nocapture --test-threads=1
+            cargo test --test 'kafka' -- --nocapture --test-threads=1
 
 workflows:
   integration-tests:
     jobs:
-      - source-test
+      - kafka-source-test

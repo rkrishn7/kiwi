@@ -3,7 +3,7 @@ use std::io::Write;
 use anyhow::Context;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempPath};
 
 pub struct Process {
     proc: std::process::Child,
@@ -63,5 +63,9 @@ impl ConfigFile {
 
     pub fn path_str(&self) -> &str {
         self.path().to_str().expect("path is not valid utf-8")
+    }
+
+    pub fn into_temp_path(self) -> TempPath {
+        self.inner.into_temp_path()
     }
 }
