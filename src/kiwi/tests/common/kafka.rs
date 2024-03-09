@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use maplit::btreemap;
-use rdkafka::admin::{AdminClient as RdKafkaAdminClient, AdminOptions, NewTopic};
+use rdkafka::admin::{AdminClient as RdKafkaAdminClient, AdminOptions, NewPartitions, NewTopic};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -53,6 +53,30 @@ impl AdminClient {
         num_partitions: i32,
     ) -> anyhow::Result<()> {
         self.create_topic(topic, num_partitions, 1).await
+    }
+
+    pub async fn update_partitions(
+        &mut self,
+        topic_name: &str,
+        new_partition_count: usize,
+    ) -> anyhow::Result<()> {
+        let result = self
+            .inner
+            .create_partitions(
+                &[NewPartitions {
+                    topic_name,
+                    new_partition_count,
+                    assignment: None,
+                }],
+                &self.options,
+            )
+            .await?;
+
+        result[0].as_ref().map_err(|(topic, error)| {
+            anyhow::anyhow!("Failed to add partitions to topic {}: {}", topic, error)
+        })?;
+
+        Ok(())
     }
 
     async fn create_topic(

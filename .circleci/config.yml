@@ -21,8 +21,7 @@ jobs:
             sudo mv ~/docker-compose /usr/local/bin/docker-compose
       - run:
           name: Start all services declared in docker-compose.yml
-          # TODO: Implement a better way to wait for Kafka to be ready
-          command: docker-compose up -d && sleep 10
+          command: docker-compose up --wait
       - run:
           name: Build Test Docker Image
           command: |
