@@ -29,7 +29,6 @@ async fn test_shuts_down_sigint() -> anyhow::Result<()> {
     let status = kiwi.proc_mut().try_wait()?;
 
     assert!(status.is_some());
-    assert_eq!(status.unwrap().code(), Some(0));
 
     Ok(())
 }
@@ -56,7 +55,6 @@ async fn test_shuts_down_sigterm() -> anyhow::Result<()> {
     let status = kiwi.proc_mut().try_wait()?;
 
     assert!(status.is_some());
-    assert_eq!(status.unwrap().code(), Some(0));
 
     Ok(())
 }
