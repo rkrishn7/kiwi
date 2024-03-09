@@ -35,7 +35,7 @@ jobs:
             --env 'BOOTSTRAP_SERVERS=kafka:19092' \
             --name kiwi-tests \
             kiwi:latest \
-            cargo test --test 'source' -- --nocapture
+            cargo test --test 'source' -- --nocapture --test-threads=1
 
 workflows:
   integration-tests:
