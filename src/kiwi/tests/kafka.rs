@@ -1,4 +1,4 @@
-mod common;
+pub mod common;
 
 use std::io::{Seek, SeekFrom, Write};
 use std::time::Duration;
