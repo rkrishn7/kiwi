@@ -41,3 +41,4 @@ arc-swap = "1.7.0"
 
 [dev-dependencies]
 tempfile = "3"
+nix = { version = "0.28.0", features = ["signal"] }

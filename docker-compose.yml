@@ -16,6 +16,13 @@ services:
     image: confluentinc/cp-kafka:latest
     hostname: kafka
     container_name: kafka
+    restart: always
+    healthcheck:
+      test: kafka-topics --list --bootstrap-server localhost:9092
+      interval: 10s
+      timeout: 20s
+      retries: 5
+      start_period: 10s
     ports:
       - "9092:9092"
       - "29092:29092"

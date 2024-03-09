@@ -4,11 +4,9 @@ orbs:
   rust: circleci/rust@1.0.0
 
 jobs:
-  integration-test:
+  integration-tests:
     parameters:
       module:
-        type: string
-      test:
         type: string
     machine:
       image: ubuntu-2004:current
@@ -16,18 +14,25 @@ jobs:
     working_directory: ~/kiwi
     steps:
       - checkout
-      - run:
-          name: Install Docker Compose
-          environment:
-            COMPOSE_VERSION: '1.29.2'
-          command: |
-            curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o ~/docker-compose
-            chmod +x ~/docker-compose
-            sudo mv ~/docker-compose /usr/local/bin/docker-compose
-      - run:
-          name: Start all services declared in docker-compose.yml
-          # TODO: Implement a better way to wait for Kafka to be ready
-          command: docker-compose up -d && sleep 10
+      - when:
+          condition:
+            equal: [<< parameters.module >>, kafka]
+          steps:
+            - run:
+                name: Install Docker Compose
+                environment:
+                  COMPOSE_VERSION: 'v2.24.7'
+                command: |
+                  curl -L "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o ~/docker-compose
+                  chmod +x ~/docker-compose
+                  sudo mv ~/docker-compose /usr/local/bin/docker-compose
+      - when:
+          condition:
+            equal: [<< parameters.module >>, kafka]
+          steps:
+            - run:
+                name: Start all services declared in docker-compose.yml
+                command: docker-compose up --wait
       - run:
           name: Build Test Docker Image
           command: |
@@ -35,19 +40,19 @@ jobs:
       - run:
           name: Run Test
           command: |
-            echo 'Running: << parameters.module >>::<< parameters.test >>'
             NETWORK_NAME=$(docker network ls --filter name='kiwi' -q)
-            echo Network: $NETWORK_NAME
-            docker run --network $NETWORK_NAME --name kiwi-tests kiwi:latest cargo test --test '<< parameters.module >>' -- --nocapture --test-threads 1 --test '<< parameters.test >>'
+            [[ -n $NETWORK_NAME ]] && NETWORK_ARG="--network $NETWORK_NAME" || NETWORK_ARG=""
+            docker run $NETWORK_ARG \
+            --env 'BOOTSTRAP_SERVERS=kafka:19092' \
+            --name kiwi-tests \
+            kiwi:latest \
+            cargo test --test '<< parameters.module >>' -- --nocapture --test-threads=1
 
 workflows:
-  kafka:
+  integration-tests:
     jobs:
-      - integration-test:
+      - integration-tests:
           matrix:
             parameters:
-              module: ["kafka"]
-              test:
-                - "test_kafka_source"
-                - "test_closes_subscription_on_changed_metadata"
-                - "test_prioritizes_source_id"
+              module:
+                - kafka
