@@ -1,15 +1,16 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::{net::SocketAddr, sync::Arc};
 
 use arc_swap::ArcSwapOption;
-use futures::{SinkExt, StreamExt};
-use tokio::io::{AsyncRead, AsyncWrite};
+use axum::body::Body;
+use axum::extract::{ConnectInfo, Request, State};
+use axum::{response::IntoResponse, routing::get, Router};
+use fastwebsockets::{upgrade, CloseCode, FragmentCollector, Frame, Payload};
+use http::{Response, StatusCode};
+use http_body_util::Empty;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
-use tokio_tungstenite::tungstenite::http::StatusCode;
-use tokio_tungstenite::WebSocketStream;
 
 use crate::connection::ConnectionManager;
 use crate::hook::authenticate::types::Authenticate;
@@ -20,13 +21,19 @@ use crate::hook::intercept::types::Intercept;
 use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
 use crate::source::{Source, SourceId};
 
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
-use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message as ProtocolMessage};
+type Sources = Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>;
+
+struct AppState<I, A> {
+    sources: Sources,
+    intercept: Arc<ArcSwapOption<I>>,
+    authenticate: Arc<ArcSwapOption<A>>,
+    subscriber_config: crate::config::Subscriber,
+}
 
 /// Starts a WebSocket server with the specified configuration
 pub async fn serve<I, A>(
     listen_addr: &SocketAddr,
-    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
+    sources: Sources,
     intercept: Arc<ArcSwapOption<I>>,
     authenticate: Arc<ArcSwapOption<A>>,
     subscriber_config: crate::config::Subscriber,
@@ -35,117 +42,109 @@ where
     I: Intercept + Send + Sync + 'static,
     A: Authenticate + Send + Sync + Unpin + 'static,
 {
+    let state = AppState {
+        sources,
+        intercept,
+        authenticate,
+        subscriber_config,
+    };
+
+    let app = Router::new()
+        .route("/", get(ws_handler))
+        .route("/health", get(healthcheck))
+        .with_state(Arc::new(state));
+
     // TODO: Support TLS
     let listener = TcpListener::bind(listen_addr).await?;
-    tracing::info!("Server started. Listening on: {}", listen_addr);
 
-    while let Ok((stream, addr)) = listener.accept().await {
-        let sources = Arc::clone(&sources);
-        let intercept = intercept.clone();
-        let authenticate = authenticate.clone();
-        let subscriber_config = subscriber_config.clone();
-        tokio::spawn(async move {
-            match perform_handshake(stream, authenticate).await {
-                Ok((mut ws_stream, auth_ctx)) => {
-                    tracing::info!(ip = ?addr, "New WebSocket connection");
+    tracing::info!("Server listening on: {}", listen_addr);
 
-                    let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx { addr });
-
-                    let _ = drive_stream(
-                        &mut ws_stream,
-                        sources,
-                        auth_ctx,
-                        connection_ctx,
-                        intercept,
-                        subscriber_config,
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Error during websocket handshake occurred for client {}: {}",
-                        addr,
-                        e
-                    );
-                }
-            }
-
-            tracing::info!("{} disconnected", addr);
-        });
-    }
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
 
-async fn perform_handshake<S, A>(
-    stream: S,
-    authenticate: Arc<ArcSwapOption<A>>,
-) -> anyhow::Result<(WebSocketStream<S>, Option<AuthCtx>)>
+async fn ws_handler<I, A>(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState<I, A>>>,
+    mut request: Request<Body>,
+) -> impl IntoResponse
 where
-    S: AsyncRead + AsyncWrite + Unpin,
-    A: Authenticate + Unpin + Send + Sync + 'static,
+    I: Intercept + Send + Sync + 'static,
+    A: Authenticate + Send + Sync + Unpin + 'static,
 {
-    let mut auth_ctx = None;
+    let (response, fut) = upgrade::upgrade(&mut request).expect("failed to build upgrade response");
 
-    let handle = tokio::runtime::Handle::current();
+    let authenticate = Arc::clone(&state.authenticate);
 
-    let ws_stream = tokio_tungstenite::accept_hdr_async_with_config(
-        stream,
-        |req: &Request, res: Response| {
-            let request = req.clone();
+    let auth_ctx = if let Some(hook) = authenticate.load().as_ref() {
+        let outcome = hook.authenticate(request.map(|_| ())).await;
 
-            if let Some(hook) = authenticate.load().as_ref() {
-                // The callback implemented by tokio-tungstenite is not async, which makes
-                // it difficult to invoke async code from within it. Ultimately, we need
-                // to block the current thread to run the async code. While it's not ideal,
-                // tokio provides `tokio::task::block_in_place` to handle this.
-                //
-                // The tokio-tungstenite issue is tracked [here](https://github.com/snapview/tokio-tungstenite/issues/159)
-                let outcome = tokio::task::block_in_place(move || {
-                    handle.block_on(async { hook.authenticate(request).await })
-                });
-
-                match outcome {
-                    Ok(Outcome::Authenticate) => (),
-                    Ok(Outcome::WithContext(ctx)) => {
-                        auth_ctx = Some(AuthCtx::from_bytes(ctx));
-                    }
-                    outcome => {
-                        if outcome.is_err() {
-                            tracing::error!(
-                                "Failed to run authentication hook. Error {:?}",
-                                outcome.unwrap_err()
-                            );
-                        }
-
-                        let mut res = ErrorResponse::new(Some("Unauthorized".to_string()));
-                        *res.status_mut() = StatusCode::UNAUTHORIZED;
-                        return Err(res);
-                    }
+        match outcome {
+            Ok(Outcome::Authenticate) => None,
+            Ok(Outcome::WithContext(ctx)) => Some(AuthCtx::from_bytes(ctx)),
+            outcome => {
+                if outcome.is_err() {
+                    tracing::error!(
+                        "Failed to run authentication hook. Error {:?}",
+                        outcome.unwrap_err()
+                    );
                 }
+
+                let mut res = Response::new(Empty::new());
+                *res.status_mut() = StatusCode::UNAUTHORIZED;
+                return res;
             }
+        }
+    } else {
+        None
+    };
 
-            Ok(res)
-        },
-        None,
-    )
-    .await?;
+    let intercept = Arc::clone(&state.intercept);
+    let sources = Arc::clone(&state.sources);
+    let subscriber_config = state.subscriber_config.clone();
+    let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx { addr });
 
-    Ok((ws_stream, auth_ctx))
+    tokio::spawn(async move {
+        if let Err(e) = handle_client(
+            fut,
+            sources,
+            intercept,
+            subscriber_config,
+            connection_ctx,
+            auth_ctx,
+        )
+        .await
+        {
+            tracing::error!("Failed to handle WebSocket client: {}", e);
+        }
+    });
+
+    response
 }
 
-async fn drive_stream<S, I>(
-    stream: &mut WebSocketStream<S>,
-    sources: Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>,
-    auth_ctx: Option<AuthCtx>,
-    connection_ctx: ConnectionCtx,
+async fn healthcheck() -> impl IntoResponse {
+    "OK"
+}
+
+async fn handle_client<I>(
+    fut: upgrade::UpgradeFut,
+    sources: Sources,
     intercept: Arc<ArcSwapOption<I>>,
     subscriber_config: crate::config::Subscriber,
+    connection_ctx: ConnectionCtx,
+    auth_ctx: Option<AuthCtx>,
 ) -> anyhow::Result<()>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
     I: Intercept + Send + Sync + 'static,
 {
+    let ws = fut.await?;
+    let mut ws = fastwebsockets::FragmentCollector::new(ws);
+
     let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
 
@@ -167,56 +166,28 @@ where
     });
 
     loop {
-        // It's important that we bias the select block towards the WebSocket stream
-        // because message pushes are likely to occur much more frequently than
-        // commands, and we want to ensure the polling of each future remains fair.
         tokio::select! {
             biased;
 
-            Some(protocol_msg) = stream.next() => {
-                match protocol_msg {
-                    Ok(msg) => {
-                        let cmd = match msg {
-                            ProtocolMessage::Text(text) => {
-                                match serde_json::from_str::<Command>(&text) {
-                                    Ok(cmd) => Ok(cmd),
-                                    Err(_) => Err(KiwiProtocolError::CommandDeserialization(text)),
-                                }
-                            },
-                            ProtocolMessage::Binary(_) => Err(KiwiProtocolError::UnsupportedCommandForm),
-                            ProtocolMessage::Close(_) => {
-                                break;
-                            },
-                            // Handling of Ping/Close messages are delegated to tungstenite
-                            _ => continue,
-                        };
-
-                        match cmd {
-                            Ok(cmd) => {
-                                if cmd_tx.send(cmd).is_err() {
-                                    // If the send failed, the channel is closed
-                                    // thus we should terminate the connection
-                                    break;
-                                }
-                            },
-                            Err(e) => {
-                                let close_frame = CloseFrame {
-                                    code: CloseCode::Unsupported,
-                                    reason: Cow::from(e.to_string()),
-                                };
-
-                                if let Err(e) = stream.close(Some(close_frame)).await {
-                                    tracing::error!("Failed to gracefully close the WebSocket connection with error {}", e);
-                                }
-
-                                break;
-                            },
+            Some(cmd) = recv_cmd(&mut ws) => {
+                match cmd {
+                    Ok(cmd) => {
+                        if cmd_tx.send(cmd).is_err() {
+                            // If the send failed, the channel is closed thus we should
+                            // terminate the connection
+                            break;
                         }
-                    },
-                    Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => break,
+                    }
                     Err(e) => {
-                        tracing::error!("Encountered unexpected error while reading from WS stream: {}", e);
-                        break;
+                        // Gracefully handle protocol errors by sending a close frame
+                        if let Some(protocol_err) = e.downcast_ref::<KiwiProtocolError>() {
+                            let close_frame = Frame::close(CloseCode::Protocol.into(), protocol_err.to_string().as_bytes());
+                            ws.write_frame(close_frame).await?;
+
+                            break;
+                        }
+
+                        return Err(e);
                     }
                 }
             },
@@ -225,10 +196,10 @@ where
                     Some(msg) => {
                         let txt = serde_json::to_string(&msg).expect("failed to serialize message");
 
-                        // TODO: Batch here and flush on an interval?
-                        if let Err(e) = stream.send(ProtocolMessage::Text(txt)).await {
-                            tracing::error!("Encountered unexpected error while feeding data to WS stream: {}", e);
-                        }
+                        let frame = Frame::text(Payload::from(txt.as_bytes()));
+
+                        ws.write_frame(frame).await?;
+
                     }
                     None => {
                         // The sole sender (our ingest actor) has hung up for some reason so we want to
@@ -236,9 +207,39 @@ where
                         break;
                     },
                 }
-            },
+            }
         }
     }
 
     Ok(())
+}
+
+async fn recv_cmd<S>(ws: &mut FragmentCollector<S>) -> Option<anyhow::Result<Command>>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let frame = match ws.read_frame().await {
+        Ok(frame) => frame,
+        Err(e) => {
+            return Some(Err(e.into()));
+        }
+    };
+
+    let maybe_cmd = match frame.opcode {
+        fastwebsockets::OpCode::Text => {
+            Some(
+                serde_json::from_slice::<Command>(&frame.payload).map_err(|_| {
+                    KiwiProtocolError::CommandDeserialization(
+                        // SAFETY: We know the payload is valid UTF-8 because `read_frame`
+                        // guarantees that text frames payloads are valid UTF-8
+                        unsafe { std::str::from_utf8_unchecked(&frame.payload) }.to_string(),
+                    )
+                }),
+            )
+        }
+        fastwebsockets::OpCode::Binary => Some(Err(KiwiProtocolError::UnsupportedCommandForm)),
+        _ => None,
+    };
+
+    maybe_cmd.map(|cmd| cmd.map_err(Into::into))
 }
