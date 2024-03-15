@@ -345,7 +345,7 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
 async fn test_intercept_hook() -> anyhow::Result<()> {
     const INTERCEPT_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/wat/kafka-even-numbers-inercept.wat"
+        "/tests/wat/kafka-even-numbers-intercept.wat"
     );
 
     let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
