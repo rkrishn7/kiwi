@@ -9,6 +9,7 @@ use common::ws::Client as WsClient;
 use kiwi::protocol::{Command, CommandResponse, Message, Notice, SubscriptionMode};
 use once_cell::sync::Lazy;
 
+use crate::common::healthcheck::Healthcheck;
 use crate::common::kafka::Producer;
 
 static BOOTSTRAP_SERVERS: Lazy<String> = Lazy::new(|| {
@@ -39,8 +40,12 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
     )?;
     let _kiwi = Process::new_with_args(&["--config", config.path_str()])?;
 
-    // TODO: Replace with a proper health check
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    Healthcheck {
+        interval: Duration::from_millis(200),
+        attempts: 10,
+        url: "http://127.0.0.1:8000/health",
+    }
+    .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
 
@@ -129,8 +134,12 @@ async fn test_closes_subscription_on_partition_added() -> anyhow::Result<()> {
     )?;
     let _kiwi = Process::new_with_args(&["--config", config.path_str()])?;
 
-    // TODO: Replace with a proper health check
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    Healthcheck {
+        interval: Duration::from_millis(200),
+        attempts: 10,
+        url: "http://127.0.0.1:8000/health",
+    }
+    .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
 
@@ -193,8 +202,12 @@ async fn test_named_kafka_source() -> anyhow::Result<()> {
     )?;
     let _kiwi = Process::new_with_args(&["--config", config.path_str()])?;
 
-    // TODO: Replace with a proper health check
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    Healthcheck {
+        interval: Duration::from_millis(200),
+        attempts: 10,
+        url: "http://127.0.0.1:8000/health",
+    }
+    .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
 
@@ -257,8 +270,12 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
     )?;
     let _kiwi = Process::new_with_args(&["--config", config.path_str()])?;
 
-    // TODO: Replace with a proper health check
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    Healthcheck {
+        interval: Duration::from_millis(200),
+        attempts: 10,
+        url: "http://127.0.0.1:8000/health",
+    }
+    .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
 
