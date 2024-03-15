@@ -6,7 +6,7 @@ use arc_swap::ArcSwapOption;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::{response::IntoResponse, routing::get, Router};
-use fastwebsockets::{upgrade, CloseCode, FragmentCollector, Frame, Payload};
+use fastwebsockets::{upgrade, CloseCode, FragmentCollector, Frame, Payload, WebSocketError};
 use http::{Response, StatusCode};
 use http_body_util::Empty;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,7 +18,7 @@ use crate::hook::authenticate::types::Outcome;
 use crate::hook::intercept::types::{AuthCtx, ConnectionCtx, WebSocketConnectionCtx};
 
 use crate::hook::intercept::types::Intercept;
-use crate::protocol::{Command, Message, ProtocolError as KiwiProtocolError};
+use crate::protocol::{Command, Message, ProtocolError};
 use crate::source::{Source, SourceId};
 
 type Sources = Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>;
@@ -42,17 +42,7 @@ where
     I: Intercept + Send + Sync + 'static,
     A: Authenticate + Send + Sync + Unpin + 'static,
 {
-    let state = AppState {
-        sources,
-        intercept,
-        authenticate,
-        subscriber_config,
-    };
-
-    let app = Router::new()
-        .route("/", get(ws_handler))
-        .route("/health", get(healthcheck))
-        .with_state(Arc::new(state));
+    let app = make_app(sources, intercept, authenticate, subscriber_config);
 
     // TODO: Support TLS
     let listener = TcpListener::bind(listen_addr).await?;
@@ -68,6 +58,59 @@ where
     Ok(())
 }
 
+fn make_app<I, A>(
+    sources: Sources,
+    intercept: Arc<ArcSwapOption<I>>,
+    authenticate: Arc<ArcSwapOption<A>>,
+    subscriber_config: crate::config::Subscriber,
+) -> Router
+where
+    I: Intercept + Send + Sync + 'static,
+    A: Authenticate + Send + Sync + Unpin + 'static,
+{
+    let state = AppState {
+        sources,
+        intercept,
+        authenticate,
+        subscriber_config,
+    };
+
+    Router::new()
+        .route("/", get(ws_handler))
+        .route("/health", get(healthcheck))
+        .with_state(Arc::new(state))
+}
+
+#[tracing::instrument(skip_all)]
+async fn load_auth_ctx<A>(
+    authenticate: Arc<ArcSwapOption<A>>,
+    request: Request<Body>,
+) -> Result<Option<AuthCtx>, ()>
+where
+    A: Authenticate + Send + Sync + Unpin + 'static,
+{
+    if let Some(hook) = authenticate.load().as_ref() {
+        let outcome = hook.authenticate(request.map(|_| ())).await;
+
+        match outcome {
+            Ok(Outcome::Authenticate) => Ok(None),
+            Ok(Outcome::WithContext(ctx)) => Ok(Some(AuthCtx::from_bytes(ctx))),
+            outcome => {
+                if outcome.is_err() {
+                    tracing::error!(
+                        "Failure occurred while running authentication hook: {:?}",
+                        outcome.unwrap_err()
+                    );
+                }
+
+                return Err(());
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 async fn ws_handler<I, A>(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState<I, A>>>,
@@ -81,27 +124,13 @@ where
 
     let authenticate = Arc::clone(&state.authenticate);
 
-    let auth_ctx = if let Some(hook) = authenticate.load().as_ref() {
-        let outcome = hook.authenticate(request.map(|_| ())).await;
-
-        match outcome {
-            Ok(Outcome::Authenticate) => None,
-            Ok(Outcome::WithContext(ctx)) => Some(AuthCtx::from_bytes(ctx)),
-            outcome => {
-                if outcome.is_err() {
-                    tracing::error!(
-                        "Failed to run authentication hook. Error {:?}",
-                        outcome.unwrap_err()
-                    );
-                }
-
-                let mut res = Response::new(Empty::new());
-                *res.status_mut() = StatusCode::UNAUTHORIZED;
-                return res;
-            }
-        }
+    let auth_ctx = if let Ok(auth_ctx) = load_auth_ctx(authenticate, request).await {
+        auth_ctx
     } else {
-        None
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Empty::new())
+            .unwrap();
     };
 
     let intercept = Arc::clone(&state.intercept);
@@ -115,13 +144,19 @@ where
             sources,
             intercept,
             subscriber_config,
-            connection_ctx,
+            connection_ctx.clone(),
             auth_ctx,
         )
         .await
         {
-            tracing::error!("Failed to handle WebSocket client: {}", e);
+            tracing::error!(
+                addr = ?addr,
+                "Error occurred while serving WebSocket client: {}",
+                e
+            );
         }
+
+        tracing::debug!(connection = ?connection_ctx, "WebSocket connection terminated");
     });
 
     response
@@ -144,6 +179,8 @@ where
 {
     let ws = fut.await?;
     let mut ws = fastwebsockets::FragmentCollector::new(ws);
+
+    tracing::debug!(connection = ?connection_ctx, "WebSocket connection established");
 
     let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
@@ -179,15 +216,28 @@ where
                         }
                     }
                     Err(e) => {
-                        // Gracefully handle protocol errors by sending a close frame
-                        if let Some(protocol_err) = e.downcast_ref::<KiwiProtocolError>() {
-                            let close_frame = Frame::close(CloseCode::Protocol.into(), protocol_err.to_string().as_bytes());
-                            ws.write_frame(close_frame).await?;
+                        let (close_code, reason) = match e {
+                            RecvError::WebSocket(e) => {
+                                match e {
+                                    WebSocketError::ConnectionClosed => break,
+                                    e => return Err(e.into()),
+                                }
+                            }
+                            RecvError::Protocol(e) => {
+                                match e {
+                                    ProtocolError::CommandDeserialization(_) => {
+                                        (CloseCode::Policy, e.to_string())
+                                    }
+                                    ProtocolError::UnsupportedCommandForm => {
+                                        (CloseCode::Unsupported, e.to_string())
+                                    }
+                                }
+                            },
+                        };
 
-                            break;
-                        }
-
-                        return Err(e);
+                        let frame = Frame::close(close_code.into(), reason.as_bytes());
+                        ws.write_frame(frame).await?;
+                        break;
                     }
                 }
             },
@@ -214,32 +264,37 @@ where
     Ok(())
 }
 
-async fn recv_cmd<S>(ws: &mut FragmentCollector<S>) -> Option<anyhow::Result<Command>>
+enum RecvError {
+    WebSocket(WebSocketError),
+    Protocol(ProtocolError),
+}
+
+async fn recv_cmd<S>(ws: &mut FragmentCollector<S>) -> Option<Result<Command, RecvError>>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     let frame = match ws.read_frame().await {
         Ok(frame) => frame,
         Err(e) => {
-            return Some(Err(e.into()));
+            return Some(Err(RecvError::WebSocket(e)));
         }
     };
 
-    let maybe_cmd = match frame.opcode {
+    match frame.opcode {
         fastwebsockets::OpCode::Text => {
             Some(
                 serde_json::from_slice::<Command>(&frame.payload).map_err(|_| {
-                    KiwiProtocolError::CommandDeserialization(
+                    RecvError::Protocol(ProtocolError::CommandDeserialization(
                         // SAFETY: We know the payload is valid UTF-8 because `read_frame`
                         // guarantees that text frames payloads are valid UTF-8
                         unsafe { std::str::from_utf8_unchecked(&frame.payload) }.to_string(),
-                    )
+                    ))
                 }),
             )
         }
-        fastwebsockets::OpCode::Binary => Some(Err(KiwiProtocolError::UnsupportedCommandForm)),
+        fastwebsockets::OpCode::Binary => Some(Err(RecvError::Protocol(
+            ProtocolError::UnsupportedCommandForm,
+        ))),
         _ => None,
-    };
-
-    maybe_cmd.map(|cmd| cmd.map_err(Into::into))
+    }
 }

@@ -1222,7 +1222,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.21.5",
- "bytes",
  "clap",
  "fastwebsockets",
  "futures",
