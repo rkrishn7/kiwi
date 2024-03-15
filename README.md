@@ -2,19 +2,21 @@
 
 [![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![CircleCI](https://dl.circleci.com/status-badge/img/gh/rkrishn7/kiwi/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/rkrishn7/kiwi/tree/main) ![contributions](https://img.shields.io/badge/contributions-welcome-green)
 
-Kiwi is a WebSocket adapter for real-time data streaming. It implements a simple protocol for clients to subscribe to configured sources, while allowing operators to maintain control over the flow of data via [WebAssembly](https://webassembly.org/) (WASM) plugins. Kiwi is designed to be a lightweight, extensible, and secure solution for delivering real-time data to clients, ensuring that they stay reactive and up-to-date with the latest data.
+Kiwi is a WebSocket adapter for real-time data sources. It implements a simple protocol for clients to subscribe to configured sources, while allowing operators to maintain control over the flow of data via [WebAssembly](https://webassembly.org/) (WASM) plugins. Kiwi is designed to be a lightweight, extensible, and secure solution for delivering real-time data to clients, ensuring that they stay reactive and up-to-date with the latest data.
 
 ***NOTE***: Kiwi is currently in active development and is not yet recommended for production use.
 
 - [🥝 Kiwi - Extensible Real-Time Data Streaming](#-kiwi---extensible-real-time-data-streaming)
   - [Features](#features)
+  - [Supported Sources](#supported-sources)
+    - [Kafka](#kafka)
+    - [Counter](#counter)
   - [Motivation](#motivation)
   - [Getting Started](#getting-started)
   - [Plugins](#plugins)
   - [Protocol](#protocol)
   - [Configuration](#configuration)
   - [Considerations](#considerations)
-  - [Known Limitations](#known-limitations)
 
 ## Features
 
@@ -22,7 +24,22 @@ Kiwi is a WebSocket adapter for real-time data streaming. It implements a simple
 - **Extensible**: Kiwi supports WebAssembly (WASM) plugins to enrich and control the flow of data. Plugins are called with context about the current connection and event, and can be used to control how/when events are forwarded to downstream clients.
 - **Backpressure Management**: Kiwi draws from flow-control concepts used by Reactive Streams. Specifically, clients can emit a `request(n)` signal to control the rate at which they receive events.
 - **Secure**: Kiwi supports TLS encryption and custom client authentication via WASM plugins.
-- **Configuration Reloads**: Kiwi can reload a subset of its configuration at runtime, allowing for dynamic updates to sources without restarting the server.
+- **Configuration Reloads**: Kiwi can reload a subset of its configuration at runtime, allowing for dynamic updates to sources and plugin code without restarting the server.
+
+## Supported Sources
+
+### Kafka
+
+Currently, Kiwi primarily supports Kafka as a data source, with plans to support additional sources in the future. Kafka sources are backed by a high-performance Rust Kafka client, [rust-rdkafka](https://github.com/fede1024/rust-rdkafka), and support automatic partition discovery.
+
+Notably, Kiwi does not leverage balanced consumer groups for Kafka sources. Instead, it subscribes to the entire set of partitions for a given topic and invokes the configured intercept plugin, if any, for each event. This has a few implications:
+
+- Kiwi may not be suitable for very high-throughput Kafka topics, as the freshness of events may be impacted by the combination of the high volume of events across partitions and per-event processing time. There are plans to support a deterministic partitioning plugin for clients in the future to address this limitation for supported use cases.
+- Event processing cannot be parallelized across multiple instances of Kiwi. If vertical scaling is not sufficient to handle the combined throughput of all configured sources, Kiwi may not be the best fit.
+
+### Counter
+
+Kiwi also includes a simple counter source for testing and demonstration purposes. The counter source emits a monotonically increasing integer at a configurable interval, and is primarily used to demonstrate the behavior of Kiwi with a simple source.
 
 ## Motivation
 
@@ -61,7 +78,7 @@ For more examples, please see the [examples](./examples) directory.
 
 ## Plugins
 
-Kiwi supports WebAssembly (WASM) plugins which allows developers to define the behavior of event delivery and authorization according to the unique requirements of their applications.
+Kiwi supports WebAssembly (WASM) plugins which allows developers to define the behavior of event delivery and authorization according to the unique requirements of their applications. A [Rust SDK](https://docs.rs/kiwi-sdk/latest/kiwi_sdk/) is provided to simplify the process of writing plugins in Rust.
 
 There are two types of plugins that Kiwi supports:
 
@@ -89,8 +106,3 @@ Kiwi excels at handling event-driven communication with efficient backpressure m
 
 Kiwi is designed to be a part of a broader architecture where it can work in conjunction with such systems, rather than serve as a standalone solution for high-throughput data processing needs.
 
-## Known Limitations
-
-Currently, Kiwi does not leverage balanced consumer groups for Kafka sources. This means that Kiwi does not support automatic load balancing of partitions across multiple instances of Kiwi, thus each instance of Kiwi subscribes to the entire set of partitions for a given topic. As a result, Kiwi may not be suitable for very high-throughput Kafka sources with large numbers of partitions.
-
-In the future, Kiwi may support balanced consumer groups for Kafka sources, enabling parallel processing of partitions across multiple instances of Kiwi. However, this feature is not planned for at this time.
