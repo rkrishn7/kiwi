@@ -339,3 +339,102 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Regression test of intercept plugins for Kafka sources
+#[tokio::test]
+async fn test_intercept_hook() -> anyhow::Result<()> {
+    const INTERCEPT_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/wat/kafka-even-numbers-inercept.wat"
+    );
+
+    let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
+    let topic = client.create_random_topic(1).await?;
+    let config = ConfigFile::from_str(
+        format!(
+            r#"
+        hooks:
+            intercept: {INTERCEPT_PATH}
+        sources:
+            - type: kafka
+              topic: {topic}
+
+        kafka:
+            bootstrap_servers:
+                - 'kafka:19092'
+        server:
+            address: '127.0.0.1:8000'
+        "#
+        )
+        .as_str(),
+    )?;
+    let _kiwi = Process::new_with_args(&["--config", config.path_str()])?;
+
+    Healthcheck {
+        interval: Duration::from_millis(200),
+        attempts: 10,
+        url: "http://127.0.0.1:8000/health",
+    }
+    .run()
+    .await?;
+
+    let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
+
+    ws_client
+        .send_json(&Command::Subscribe {
+            source_id: topic.clone(),
+            mode: SubscriptionMode::Push,
+        })
+        .await?;
+
+    let resp: Message = ws_client.recv_json().await?;
+
+    assert!(
+        matches!(resp, kiwi::protocol::Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) if source_id == topic)
+    );
+
+    let producer = tokio::spawn({
+        let topic = topic.clone();
+        async move {
+            let producer = Producer::new(BOOTSTRAP_SERVERS.as_str())?;
+
+            for i in 0..1000 {
+                let payload = format!("{i}");
+                producer.send(&topic, &payload, &payload).await?;
+            }
+
+            Ok::<_, anyhow::Error>(())
+        }
+    });
+
+    let consumer = tokio::spawn(async move {
+        loop {
+            let msg = ws_client
+                .recv_json::<kiwi::protocol::SourceResult>()
+                .await?;
+
+            match msg {
+                kiwi::protocol::SourceResult::Kafka {
+                    source_id, payload, ..
+                } => {
+                    assert_eq!(source_id.as_ref(), topic);
+
+                    let payload: i32 = std::str::from_utf8(&payload.unwrap())?.parse()?;
+
+                    assert_eq!(payload % 2, 0);
+
+                    if payload == 998 {
+                        break;
+                    }
+                }
+                _ => panic!("Expected Kafka message. Received {:?}", msg),
+            }
+        }
+
+        Ok::<_, anyhow::Error>(())
+    });
+
+    assert!(matches!(futures::join!(producer, consumer), (Ok(_), Ok(_))));
+
+    Ok(())
+}
