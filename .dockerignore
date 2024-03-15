@@ -4,3 +4,4 @@
 !/bin
 !Cargo.toml
 !Cargo.lock
+!/.circleci/bin
