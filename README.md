@@ -8,12 +8,12 @@ Kiwi is a WebSocket adapter for real-time data sources. It implements a simple p
 
 - [🥝 Kiwi - Extensible Real-Time Data Streaming](#-kiwi---extensible-real-time-data-streaming)
   - [Features](#features)
-  - [Supported Sources](#supported-sources)
-    - [Kafka](#kafka)
-    - [Counter](#counter)
   - [Motivation](#motivation)
   - [Getting Started](#getting-started)
   - [Plugins](#plugins)
+  - [Sources](#sources)
+    - [Kafka](#kafka)
+    - [Counter](#counter)
   - [Protocol](#protocol)
   - [Configuration](#configuration)
   - [Considerations](#considerations)
@@ -25,21 +25,6 @@ Kiwi is a WebSocket adapter for real-time data sources. It implements a simple p
 - **Backpressure Management**: Kiwi draws from flow-control concepts used by Reactive Streams. Specifically, clients can emit a `request(n)` signal to control the rate at which they receive events.
 - **Secure**: Kiwi supports TLS encryption and custom client authentication via WASM plugins.
 - **Configuration Reloads**: Kiwi can reload a subset of its configuration at runtime, allowing for dynamic updates to sources and plugin code without restarting the server.
-
-## Supported Sources
-
-### Kafka
-
-Currently, Kiwi primarily supports Kafka as a data source, with plans to support additional sources in the future. Kafka sources are backed by a high-performance Rust Kafka client, [rust-rdkafka](https://github.com/fede1024/rust-rdkafka), and support automatic partition discovery.
-
-Notably, Kiwi does not leverage balanced consumer groups for Kafka sources. Instead, it subscribes to the entire set of partitions for a given topic and invokes the configured intercept plugin, if any, for each event. This has a few implications:
-
-- Kiwi may not be suitable for very high-throughput Kafka topics, as the freshness of events may be impacted by the combination of the high volume of events across partitions and per-event processing time. There are plans to support a deterministic partitioning plugin for clients in the future to address this limitation for supported use cases.
-- Event processing cannot be parallelized across multiple instances of Kiwi. If vertical scaling is not sufficient to handle the combined throughput of all configured sources, Kiwi may not be the best fit.
-
-### Counter
-
-Kiwi also includes a simple counter source for testing and demonstration purposes. The counter source emits a monotonically increasing integer at a configurable interval, and is primarily used to demonstrate the behavior of Kiwi with a simple source.
 
 ## Motivation
 
@@ -89,6 +74,21 @@ There are two types of plugins that Kiwi supports:
   - Authentication plugins allow users of Kiwi to enforce custom authentication logic, such as verifying JWT tokens or checking for specific user roles. Additionally, the plugin may return custom context for the connection which is passed downstream to each invocation of the intercept plugin.
 
 For more information on writing and using plugins, please see the [plugin documentation](./doc/PLUGIN.md).
+
+## Sources
+
+### Kafka
+
+Currently, Kiwi primarily supports Kafka as a data source, with plans to support additional sources in the future. Kafka sources are backed by a high-performance Rust Kafka client, [rust-rdkafka](https://github.com/fede1024/rust-rdkafka), and support automatic partition discovery.
+
+Notably, Kiwi does not leverage balanced consumer groups for Kafka sources. Instead, it subscribes to the entire set of partitions for a given topic and invokes the configured intercept plugin, if any, for each event. This has a few implications:
+
+- Kiwi may not be suitable for very high-throughput Kafka topics, as the freshness of events may be impacted by the combination of the high volume of events across partitions and per-event processing time. There are plans to support a deterministic partitioning plugin for clients in the future to address this limitation for supported use cases.
+- Event processing cannot be parallelized across multiple instances of Kiwi. If vertical scaling is not sufficient to handle the combined throughput of all configured sources, Kiwi may not be the best fit.
+
+### Counter
+
+Kiwi also includes a simple counter source for testing and demonstration purposes. The counter source emits a monotonically increasing integer at a configurable interval, and is primarily used to demonstrate the behavior of Kiwi with a simple source.
 
 ## Protocol
 
