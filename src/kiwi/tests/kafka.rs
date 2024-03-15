@@ -45,6 +45,7 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
         attempts: 10,
         url: "http://127.0.0.1:8000/health",
     }
+    .run()
     .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
@@ -139,6 +140,7 @@ async fn test_closes_subscription_on_partition_added() -> anyhow::Result<()> {
         attempts: 10,
         url: "http://127.0.0.1:8000/health",
     }
+    .run()
     .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
@@ -207,6 +209,7 @@ async fn test_named_kafka_source() -> anyhow::Result<()> {
         attempts: 10,
         url: "http://127.0.0.1:8000/health",
     }
+    .run()
     .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;
@@ -275,6 +278,7 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
         attempts: 10,
         url: "http://127.0.0.1:8000/health",
     }
+    .run()
     .await?;
 
     let (mut ws_client, _) = WsClient::connect("ws://127.0.0.1:8000").await?;

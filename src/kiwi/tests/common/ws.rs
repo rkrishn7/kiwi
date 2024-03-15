@@ -1,27 +1,70 @@
-use futures::{SinkExt, StreamExt};
-use http::Response;
+use fastwebsockets::FragmentCollector;
+use fastwebsockets::Frame;
+use fastwebsockets::OpCode;
+use fastwebsockets::Payload;
+use futures::Future;
+use http_body_util::Empty;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{client::IntoClientRequest, Message},
-    MaybeTlsStream, WebSocketStream,
-};
+
+use bytes::Bytes;
+use hyper::body::Incoming;
+use hyper::header::CONNECTION;
+use hyper::header::UPGRADE;
+use hyper::upgrade::Upgraded;
+use hyper::{Request, Response, Uri};
+use hyper_util::rt::TokioIo;
 
 pub struct Client {
-    stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    ws: FragmentCollector<TokioIo<Upgraded>>,
+}
+
+struct SpawnExecutor;
+
+impl<Fut> hyper::rt::Executor<Fut> for SpawnExecutor
+where
+    Fut: Future + Send + 'static,
+    Fut::Output: Send + 'static,
+{
+    fn execute(&self, fut: Fut) {
+        tokio::task::spawn(fut);
+    }
 }
 
 impl Client {
-    pub async fn connect<R: IntoClientRequest + Unpin>(
-        url: R,
-    ) -> anyhow::Result<(Self, Response<Option<Vec<u8>>>)> {
-        let (stream, response) = connect_async(url).await?;
+    pub async fn connect(uri: &str) -> anyhow::Result<(Self, Response<Incoming>)> {
+        let uri: Uri = uri.try_into()?;
+        let stream = TcpStream::connect(
+            format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap()).as_str(),
+        )
+        .await?;
 
-        Ok((Self { stream }, response))
+        let req = Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .header("Host", uri.host().unwrap())
+            .header(UPGRADE, "websocket")
+            .header(CONNECTION, "upgrade")
+            .header(
+                "Sec-WebSocket-Key",
+                fastwebsockets::handshake::generate_key(),
+            )
+            .header("Sec-WebSocket-Version", "13")
+            .body(Empty::<Bytes>::new())?;
+
+        let (ws, res) = fastwebsockets::handshake::client(&SpawnExecutor, req, stream).await?;
+
+        Ok((
+            Self {
+                ws: FragmentCollector::new(ws),
+            },
+            res,
+        ))
     }
 
     pub async fn send_text(&mut self, text: &str) -> anyhow::Result<()> {
-        self.stream.send(Message::Text(text.to_string())).await?;
+        self.ws
+            .write_frame(Frame::text(Payload::Borrowed(text.as_bytes())))
+            .await?;
 
         Ok(())
     }
@@ -33,16 +76,18 @@ impl Client {
         Ok(())
     }
 
-    pub async fn recv(&mut self) -> Option<Result<Message, tokio_tungstenite::tungstenite::Error>> {
-        self.stream.next().await
+    pub async fn recv_text_frame(&mut self) -> anyhow::Result<Frame<'_>> {
+        let frame = self.ws.read_frame().await?;
+
+        match frame.opcode {
+            OpCode::Text => Ok(frame),
+            _ => Err(anyhow::anyhow!("Expected text frame")),
+        }
     }
 
     pub async fn recv_json<T: serde::de::DeserializeOwned>(&mut self) -> anyhow::Result<T> {
-        let message = self
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Connection closed"))??;
-        let text = message.to_text()?;
+        let text_frame = self.recv_text_frame().await?;
+        let text = std::str::from_utf8(text_frame.payload.as_ref())?;
         let value = serde_json::from_str(&text)?;
 
         Ok(value)
