@@ -12,15 +12,21 @@ use once_cell::sync::Lazy;
 use crate::common::healthcheck::Healthcheck;
 use crate::common::kafka::Producer;
 
-static BOOTSTRAP_SERVERS: Lazy<String> = Lazy::new(|| {
-    std::env::var("BOOTSTRAP_SERVERS").expect("BOOTSTRAP_SERVERS env var is required")
+static BOOTSTRAP_SERVER: Lazy<String> = Lazy::new(|| {
+    std::env::var("BOOTSTRAP_SERVERS")
+        .expect("BOOTSTRAP_SERVERS env var is required")
+        .split(',')
+        .next()
+        .unwrap()
+        .to_string()
 });
 
 /// Tests that the subscriber (client) receives messages from the specified
 /// Kafka topic
 #[tokio::test]
 async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
-    let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
+    let bootstrap_server = BOOTSTRAP_SERVER.as_str();
+    let mut client = AdminClient::new(bootstrap_server)?;
     let topic = client.create_random_topic(1).await?;
     let config = ConfigFile::from_str(
         format!(
@@ -31,7 +37,7 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
 
         kafka:
             bootstrap_servers:
-                - 'kafka:19092'
+                - '{bootstrap_server}'
         server:
             address: '127.0.0.1:8000'
         "#
@@ -66,7 +72,7 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
     let producer = tokio::spawn({
         let topic = topic.clone();
         async move {
-            let producer = Producer::new(BOOTSTRAP_SERVERS.as_str())?;
+            let producer = Producer::new(bootstrap_server)?;
 
             for i in 0..1000 {
                 let payload = format!("Message {}", i);
@@ -114,7 +120,8 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
 /// re-subscribing.
 #[tokio::test]
 async fn test_closes_subscription_on_partition_added() -> anyhow::Result<()> {
-    let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
+    let bootstrap_server = BOOTSTRAP_SERVER.as_str();
+    let mut client = AdminClient::new(bootstrap_server)?;
     let topic = client.create_random_topic(1).await?;
     let config = ConfigFile::from_str(
         format!(
@@ -125,7 +132,7 @@ async fn test_closes_subscription_on_partition_added() -> anyhow::Result<()> {
 
         kafka:
             bootstrap_servers:
-                - 'kafka:19092'
+                - '{bootstrap_server}'
             partition_discovery_interval_ms: 3000
         server:
             address: '127.0.0.1:8000'
@@ -183,7 +190,8 @@ async fn test_closes_subscription_on_partition_added() -> anyhow::Result<()> {
 /// rather than the topic name
 #[tokio::test]
 async fn test_named_kafka_source() -> anyhow::Result<()> {
-    let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
+    let bootstrap_server = BOOTSTRAP_SERVER.as_str();
+    let mut client = AdminClient::new(bootstrap_server)?;
     let topic = client.create_random_topic(1).await?;
     let config = ConfigFile::from_str(
         format!(
@@ -195,7 +203,7 @@ async fn test_named_kafka_source() -> anyhow::Result<()> {
 
         kafka:
             bootstrap_servers:
-                - 'kafka:19092'
+                - '{bootstrap_server}'
         server:
             address: '127.0.0.1:8000'
         "#
@@ -238,7 +246,7 @@ async fn test_named_kafka_source() -> anyhow::Result<()> {
         Message::CommandResponse(CommandResponse::SubscribeOk { source_id }) if source_id == "my-kafka-source"
     ));
 
-    let producer = Producer::new(BOOTSTRAP_SERVERS.as_str())?;
+    let producer = Producer::new(bootstrap_server)?;
 
     producer.send(&topic, "key", "value").await?;
 
@@ -254,7 +262,8 @@ async fn test_named_kafka_source() -> anyhow::Result<()> {
 /// of the sources and closes any outstanding subscriptions to the respective source
 #[tokio::test]
 async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
-    let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
+    let bootstrap_server = BOOTSTRAP_SERVER.as_str();
+    let mut client = AdminClient::new(bootstrap_server)?;
     let topic = client.create_random_topic(1).await?;
     let mut config = ConfigFile::from_str(
         format!(
@@ -264,7 +273,7 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
               topic: {topic}
         kafka:
             bootstrap_servers:
-                - 'kafka:19092'
+                - '{bootstrap_server}'
         server:
             address: '127.0.0.1:8000'
         "#
@@ -348,7 +357,8 @@ async fn test_intercept_hook() -> anyhow::Result<()> {
         "/tests/wat/kafka-even-numbers-intercept.wat"
     );
 
-    let mut client = AdminClient::new(BOOTSTRAP_SERVERS.as_str())?;
+    let bootstrap_server = BOOTSTRAP_SERVER.as_str();
+    let mut client = AdminClient::new(bootstrap_server)?;
     let topic = client.create_random_topic(1).await?;
     let config = ConfigFile::from_str(
         format!(
@@ -361,7 +371,7 @@ async fn test_intercept_hook() -> anyhow::Result<()> {
 
         kafka:
             bootstrap_servers:
-                - 'kafka:19092'
+                - '{bootstrap_server}'
         server:
             address: '127.0.0.1:8000'
         "#
@@ -396,7 +406,7 @@ async fn test_intercept_hook() -> anyhow::Result<()> {
     let producer = tokio::spawn({
         let topic = topic.clone();
         async move {
-            let producer = Producer::new(BOOTSTRAP_SERVERS.as_str())?;
+            let producer = Producer::new(bootstrap_server)?;
 
             for i in 0..1000 {
                 let payload = format!("{i}");
