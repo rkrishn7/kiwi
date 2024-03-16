@@ -57,3 +57,4 @@ workflows:
               module:
                 - kafka
                 - lifecycle
+                - hook
