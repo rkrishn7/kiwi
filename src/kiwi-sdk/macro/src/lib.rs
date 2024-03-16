@@ -186,7 +186,7 @@ pub fn authenticate(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         let scheme = match scheme {
                             ::kiwi_sdk::wit::wasi::http::types::Scheme::Http => ::kiwi_sdk::http::Scheme::HTTP,
                             ::kiwi_sdk::wit::wasi::http::types::Scheme::Https => ::kiwi_sdk::http::Scheme::HTTPS,
-                            ::kiwi_sdk::wit::wasi::http::types::Scheme::Other(scheme) => panic!("Unsupported scheme"),
+                            ::kiwi_sdk::wit::wasi::http::types::Scheme::Other(scheme) => scheme.as_str().parse().expect("failed to parse scheme"),
                         };
 
                         uri_builder = uri_builder.scheme(scheme);
