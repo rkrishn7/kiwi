@@ -86,14 +86,12 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
 
     let consumer = tokio::spawn(async move {
         for count in 0..1000 {
-            let msg = ws_client
-                .recv_json::<kiwi::protocol::SourceResult>()
-                .await?;
+            let msg = ws_client.recv_json::<Message>().await?;
 
             match msg {
-                kiwi::protocol::SourceResult::Kafka {
+                Message::Result(kiwi::protocol::SourceResult::Kafka {
                     source_id, payload, ..
-                } => {
+                }) => {
                     assert_eq!(source_id.as_ref(), topic);
                     assert_eq!(
                         std::str::from_utf8(&payload.unwrap()).unwrap(),
@@ -107,7 +105,10 @@ async fn test_receives_messages_kafka_source() -> anyhow::Result<()> {
         Ok::<_, anyhow::Error>(())
     });
 
-    assert!(matches!(futures::join!(producer, consumer), (Ok(_), Ok(_))));
+    assert!(matches!(
+        futures::join!(producer, consumer),
+        (Ok(Ok(_)), Ok(Ok(_)))
+    ));
 
     Ok(())
 }
@@ -354,7 +355,7 @@ async fn test_dynamic_config_source_removal() -> anyhow::Result<()> {
 async fn test_intercept_hook() -> anyhow::Result<()> {
     const INTERCEPT_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/wat/kafka-even-numbers-intercept.wat"
+        "/tests/wasm/kafka-even-numbers-intercept.wasm"
     );
 
     let bootstrap_server = BOOTSTRAP_SERVER.as_str();
@@ -419,14 +420,12 @@ async fn test_intercept_hook() -> anyhow::Result<()> {
 
     let consumer = tokio::spawn(async move {
         loop {
-            let msg = ws_client
-                .recv_json::<kiwi::protocol::SourceResult>()
-                .await?;
+            let msg = ws_client.recv_json::<Message>().await?;
 
             match msg {
-                kiwi::protocol::SourceResult::Kafka {
+                Message::Result(kiwi::protocol::SourceResult::Kafka {
                     source_id, payload, ..
-                } => {
+                }) => {
                     assert_eq!(source_id.as_ref(), topic);
 
                     let payload: i32 = std::str::from_utf8(&payload.unwrap())?.parse()?;
@@ -444,7 +443,10 @@ async fn test_intercept_hook() -> anyhow::Result<()> {
         Ok::<_, anyhow::Error>(())
     });
 
-    assert!(matches!(futures::join!(producer, consumer), (Ok(_), Ok(_))));
+    assert!(matches!(
+        futures::join!(producer, consumer),
+        (Ok(Ok(_)), Ok(Ok(_)))
+    ));
 
     Ok(())
 }
