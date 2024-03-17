@@ -36,7 +36,7 @@ jobs:
       - run:
           name: Build Test Docker Image
           command: |
-            docker build -t kiwi:latest -f Dockerfile.ci .
+            DOCKER_BUILDKIT=1 docker build -t kiwi:latest -f Dockerfile.ci .
       - run:
           name: Run Test
           command: |
@@ -57,3 +57,4 @@ workflows:
               module:
                 - kafka
                 - lifecycle
+                - hook
