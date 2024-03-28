@@ -97,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
             intercept,
             authenticate,
             config.subscriber,
+            config.server.tls,
         ) => {}
     }
 

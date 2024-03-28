@@ -103,6 +103,19 @@ server:
   #
   ## Required
   address: '127.0.0.1:8000'
+  # TLS Configuration
+  #
+  ## Optional
+  tls:
+    # The path to the certificate file
+    #
+    ## Required
+    cert: '/path/to/cert.pem'
+    # The path to the private key file
+    #
+    ## Required
+    key: '/path/to/key.pem'
+
 
 # Subscriber Configuration
 #
