@@ -6,11 +6,11 @@ use arc_swap::ArcSwapOption;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::{response::IntoResponse, routing::get, Router};
+use axum_server::tls_rustls::RustlsConfig;
 use fastwebsockets::{upgrade, CloseCode, FragmentCollector, Frame, Payload, WebSocketError};
 use http::{Response, StatusCode};
 use http_body_util::Empty;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 
 use crate::connection::ConnectionManager;
 use crate::hook::authenticate::types::Authenticate;
@@ -37,23 +37,26 @@ pub async fn serve<I, A>(
     intercept: Arc<ArcSwapOption<I>>,
     authenticate: Arc<ArcSwapOption<A>>,
     subscriber_config: crate::config::Subscriber,
+    tls_config: Option<crate::config::Tls>,
 ) -> anyhow::Result<()>
 where
     I: Intercept + Send + Sync + 'static,
     A: Authenticate + Send + Sync + Unpin + 'static,
 {
     let app = make_app(sources, intercept, authenticate, subscriber_config);
-
-    // TODO: Support TLS
-    let listener = TcpListener::bind(listen_addr).await?;
+    let svc = app.into_make_service_with_connect_info::<SocketAddr>();
 
     tracing::info!("Server listening on: {}", listen_addr);
 
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
+    if let Some(tls) = tls_config {
+        let config = RustlsConfig::from_pem_file(&tls.cert, &tls.key).await?;
+
+        axum_server::bind_rustls(*listen_addr, config)
+            .serve(svc)
+            .await?;
+    } else {
+        axum_server::bind(*listen_addr).serve(svc).await?;
+    };
 
     Ok(())
 }
