@@ -96,6 +96,14 @@ pub struct Hooks {
 pub struct Server {
     pub address: String,
     pub tls: Option<Tls>,
+    #[serde(default = "Server::default_healthcheck_enabled")]
+    pub healthcheck: bool,
+}
+
+impl Server {
+    fn default_healthcheck_enabled() -> bool {
+        true
+    }
 }
 
 /// TLS configuration
@@ -675,6 +683,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -701,6 +710,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -717,6 +727,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: Some(Kafka {
                 group_id_prefix: "kiwi-".into(),
@@ -752,6 +763,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -803,6 +815,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -859,6 +872,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -890,6 +904,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -918,6 +933,7 @@ mod tests {
             server: Server {
                 address: "127.0.0.1:8000".into(),
                 tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),

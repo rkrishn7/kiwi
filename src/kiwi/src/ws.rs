@@ -2,14 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::{net::SocketAddr, sync::Arc};
 
+use anyhow::Context;
 use arc_swap::ArcSwapOption;
-use axum::body::Body;
-use axum::extract::{ConnectInfo, Request, State};
-use axum::{response::IntoResponse, routing::get, Router};
-use axum_server::tls_rustls::RustlsConfig;
+use bytes::Bytes;
 use fastwebsockets::{upgrade, CloseCode, FragmentCollector, Frame, Payload, WebSocketError};
-use http::{Response, StatusCode};
+use http::{Request, Response, StatusCode};
 use http_body_util::Empty;
+use hyper::service::service_fn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::connection::ConnectionManager;
@@ -20,15 +19,9 @@ use crate::hook::intercept::types::{AuthCtx, ConnectionCtx, WebSocketConnectionC
 use crate::hook::intercept::types::Intercept;
 use crate::protocol::{Command, Message, ProtocolError};
 use crate::source::{Source, SourceId};
+use crate::tls::{tls_acceptor, MaybeTlsStream};
 
 type Sources = Arc<Mutex<BTreeMap<SourceId, Box<dyn Source + Send + Sync + 'static>>>>;
-
-struct AppState<I, A> {
-    sources: Sources,
-    intercept: Arc<ArcSwapOption<I>>,
-    authenticate: Arc<ArcSwapOption<A>>,
-    subscriber_config: crate::config::Subscriber,
-}
 
 /// Starts a WebSocket server with the specified configuration
 pub async fn serve<I, A>(
@@ -38,56 +31,85 @@ pub async fn serve<I, A>(
     authenticate: Arc<ArcSwapOption<A>>,
     subscriber_config: crate::config::Subscriber,
     tls_config: Option<crate::config::Tls>,
+    healthcheck: bool,
 ) -> anyhow::Result<()>
 where
     I: Intercept + Send + Sync + 'static,
     A: Authenticate + Send + Sync + Unpin + 'static,
 {
-    let app = make_app(sources, intercept, authenticate, subscriber_config);
-    let svc = app.into_make_service_with_connect_info::<SocketAddr>();
-
-    tracing::info!("Server listening on: {}", listen_addr);
-
-    if let Some(tls) = tls_config {
-        let config = RustlsConfig::from_pem_file(&tls.cert, &tls.key).await?;
-
-        axum_server::bind_rustls(*listen_addr, config)
-            .serve(svc)
-            .await?;
+    let acceptor = if let Some(tls) = tls_config {
+        Some(tls_acceptor(&tls.cert, &tls.key).context("Failed to build TLS acceptor")?)
     } else {
-        axum_server::bind(*listen_addr).serve(svc).await?;
+        None
     };
+    let listener = tokio::net::TcpListener::bind(listen_addr).await?;
+    tracing::info!("Server listening on: {listen_addr}");
 
-    Ok(())
-}
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        tracing::debug!(addr = ?addr, "Accepted connection");
+        let acceptor = acceptor.clone();
+        let authenticate = Arc::clone(&authenticate);
+        let intercept = Arc::clone(&intercept);
+        let sources = Arc::clone(&sources);
+        let subscriber_config = subscriber_config.clone();
 
-fn make_app<I, A>(
-    sources: Sources,
-    intercept: Arc<ArcSwapOption<I>>,
-    authenticate: Arc<ArcSwapOption<A>>,
-    subscriber_config: crate::config::Subscriber,
-) -> Router
-where
-    I: Intercept + Send + Sync + 'static,
-    A: Authenticate + Send + Sync + Unpin + 'static,
-{
-    let state = AppState {
-        sources,
-        intercept,
-        authenticate,
-        subscriber_config,
-    };
+        tokio::spawn(async move {
+            let io = if let Some(acceptor) = acceptor {
+                match acceptor.accept(stream).await {
+                    Ok(stream) => hyper_util::rt::TokioIo::new(MaybeTlsStream::Tls(stream)),
+                    Err(e) => {
+                        tracing::error!(addr = ?addr, "Failed to accept TLS connection: {}", e);
+                        return;
+                    }
+                }
+            } else {
+                hyper_util::rt::TokioIo::new(MaybeTlsStream::Plain(stream))
+            };
 
-    Router::new()
-        .route("/", get(ws_handler))
-        .route("/health", get(healthcheck))
-        .with_state(Arc::new(state))
+            let builder =
+                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+            let conn_fut = builder.serve_connection_with_upgrades(
+                io,
+                service_fn(move |req: Request<hyper::body::Incoming>| {
+                    let authenticate = Arc::clone(&authenticate);
+                    let sources = Arc::clone(&sources);
+                    let intercept = Arc::clone(&intercept);
+                    let subscriber_config = subscriber_config.clone();
+
+                    async move {
+                        if healthcheck && req.uri().path() == "/health" {
+                            return Response::builder()
+                                .status(StatusCode::OK)
+                                .body(Empty::new());
+                        }
+
+                        let response = handle_ws(
+                            sources,
+                            intercept,
+                            authenticate,
+                            subscriber_config,
+                            addr,
+                            req,
+                        )
+                        .await;
+
+                        Ok(response)
+                    }
+                }),
+            );
+
+            if let Err(e) = conn_fut.await {
+                tracing::error!(addr = ?addr, "Error occurred while serving connection: {}", e);
+            }
+        });
+    }
 }
 
 #[tracing::instrument(skip_all)]
 async fn load_auth_ctx<A>(
     authenticate: Arc<ArcSwapOption<A>>,
-    request: Request<Body>,
+    request: Request<hyper::body::Incoming>,
 ) -> Result<Option<AuthCtx>, ()>
 where
     A: Authenticate + Send + Sync + Unpin + 'static,
@@ -114,18 +136,21 @@ where
     }
 }
 
-async fn ws_handler<I, A>(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    State(state): State<Arc<AppState<I, A>>>,
-    mut request: Request<Body>,
-) -> impl IntoResponse
+async fn handle_ws<I, A>(
+    sources: Sources,
+    intercept: Arc<ArcSwapOption<I>>,
+    authenticate: Arc<ArcSwapOption<A>>,
+    subscriber_config: crate::config::Subscriber,
+    addr: SocketAddr,
+    mut request: Request<hyper::body::Incoming>,
+) -> Response<Empty<Bytes>>
 where
     I: Intercept + Send + Sync + 'static,
     A: Authenticate + Send + Sync + Unpin + 'static,
 {
-    let (response, fut) = upgrade::upgrade(&mut request).expect("failed to build upgrade response");
+    let (response, fut) = upgrade::upgrade(&mut request).expect("Failed to upgrade connection");
 
-    let authenticate = Arc::clone(&state.authenticate);
+    let authenticate = Arc::clone(&authenticate);
 
     let auth_ctx = if let Ok(auth_ctx) = load_auth_ctx(authenticate, request).await {
         auth_ctx
@@ -136,9 +161,6 @@ where
             .unwrap();
     };
 
-    let intercept = Arc::clone(&state.intercept);
-    let sources = Arc::clone(&state.sources);
-    let subscriber_config = state.subscriber_config.clone();
     let connection_ctx = ConnectionCtx::WebSocket(WebSocketConnectionCtx { addr });
 
     tokio::spawn(async move {
@@ -159,14 +181,10 @@ where
             );
         }
 
-        tracing::debug!(connection = ?connection_ctx, "WebSocket connection terminated");
+        tracing::debug!(connection = ?connection_ctx, "WebSocket connection terminated normally");
     });
 
     response
-}
-
-async fn healthcheck() -> impl IntoResponse {
-    "OK"
 }
 
 async fn handle_client<I>(
@@ -209,16 +227,16 @@ where
         tokio::select! {
             biased;
 
-            Some(cmd) = recv_cmd(&mut ws) => {
-                match cmd {
-                    Ok(cmd) => {
+            maybe_cmd = recv_cmd(&mut ws) => {
+                match maybe_cmd {
+                    Some(Ok(cmd)) => {
                         if cmd_tx.send(cmd).is_err() {
                             // If the send failed, the channel is closed thus we should
                             // terminate the connection
                             break;
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         let (close_code, reason) = match e {
                             RecvError::WebSocket(e) => {
                                 match e {
@@ -240,6 +258,10 @@ where
 
                         let frame = Frame::close(close_code.into(), reason.as_bytes());
                         ws.write_frame(frame).await?;
+                        break;
+                    }
+                    None => {
+                        // The connection has been closed
                         break;
                     }
                 }
@@ -298,6 +320,7 @@ where
         fastwebsockets::OpCode::Binary => Some(Err(RecvError::Protocol(
             ProtocolError::UnsupportedCommandForm,
         ))),
-        _ => None,
+        fastwebsockets::OpCode::Close => None,
+        _ => panic!("Received unexpected opcode"),
     }
 }

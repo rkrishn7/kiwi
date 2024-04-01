@@ -1,3 +1,5 @@
 /target
 /*.wasm
 /*kiwi.yml
+/*.crt
+/*.key

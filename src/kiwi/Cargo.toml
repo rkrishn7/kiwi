@@ -38,9 +38,12 @@ http = "1.0.0"
 notify = "6.1.1"
 arc-swap = "1.7.0"
 fastwebsockets = { version = "0.7.0", features = ["with_axum", "upgrade"] }
-axum = "0.7.4"
 http-body-util = "0.1.1"
-axum-server = { version = "0.6.0", features = ["tls-rustls"] }
+hyper = "1.2.0"
+hyper-util = { version = "0.1.3", features = ["server", "http1", "http2"] }
+tokio-rustls = "0.26.0"
+rustls-pemfile = "2.1.1"
+bytes = "1.5.0"
 
 [dev-dependencies]
 tempfile = "3"
