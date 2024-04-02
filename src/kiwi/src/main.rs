@@ -87,18 +87,22 @@ async fn main() -> anyhow::Result<()> {
     tokio::select! {
         _ = term.recv() => {
             tracing::info!("Received SIGTERM, shutting down");
+            Ok(())
         }
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Received SIGINT, shutting down");
+            Ok(())
         }
-        _ = kiwi::ws::serve(
+        res = kiwi::ws::serve(
             &listen_addr,
             sources,
             intercept,
             authenticate,
             config.subscriber,
-        ) => {}
+            config.server.tls,
+            config.server.healthcheck,
+        ) => {
+            res
+        }
     }
-
-    Ok(())
 }

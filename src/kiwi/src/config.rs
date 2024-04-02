@@ -95,6 +95,22 @@ pub struct Hooks {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Server {
     pub address: String,
+    pub tls: Option<Tls>,
+    #[serde(default = "Server::default_healthcheck_enabled")]
+    pub healthcheck: bool,
+}
+
+impl Server {
+    fn default_healthcheck_enabled() -> bool {
+        true
+    }
+}
+
+/// TLS configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct Tls {
+    pub cert: PathBuf,
+    pub key: PathBuf,
 }
 
 /// General subscriber configuration
@@ -446,6 +462,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parses_server_tls() {
+        let config = "
+        sources: []
+        server:
+            address: '127.0.0.1:8000'
+            tls:
+                cert: 'cert.pem'
+                key: 'key.pem'
+        ";
+
+        let config = Config::from_str(config).unwrap();
+        assert!(config.server.tls.is_some());
+        let tls = config.server.tls.unwrap();
+        assert_eq!(tls.cert, PathBuf::from("cert.pem"));
+        assert_eq!(tls.key, PathBuf::from("key.pem"));
+    }
+
+    #[test]
     fn test_parses_sources() {
         let config = "
         sources:
@@ -648,6 +682,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -673,6 +709,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -688,6 +726,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: Some(Kafka {
                 group_id_prefix: "kiwi-".into(),
@@ -722,6 +762,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -772,6 +814,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -827,6 +871,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -857,6 +903,8 @@ mod tests {
             }),
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
@@ -884,6 +932,8 @@ mod tests {
             hooks: None,
             server: Server {
                 address: "127.0.0.1:8000".into(),
+                tls: None,
+                healthcheck: false,
             },
             kafka: None,
             subscriber: Subscriber::default(),
