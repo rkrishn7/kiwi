@@ -34,7 +34,7 @@ pub fn tls_acceptor(cert: impl AsRef<Path>, key: impl AsRef<Path>) -> anyhow::Re
 
 pub enum MaybeTlsStream<S> {
     Plain(S),
-    Tls(TlsStream<S>),
+    Tls(Box<TlsStream<S>>),
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for MaybeTlsStream<S> {

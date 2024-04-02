@@ -57,7 +57,9 @@ where
         tokio::spawn(async move {
             let io = if let Some(acceptor) = acceptor {
                 match acceptor.accept(stream).await {
-                    Ok(stream) => hyper_util::rt::TokioIo::new(MaybeTlsStream::Tls(stream)),
+                    Ok(stream) => {
+                        hyper_util::rt::TokioIo::new(MaybeTlsStream::Tls(Box::new(stream)))
+                    }
                     Err(e) => {
                         tracing::error!(addr = ?addr, "Failed to accept TLS connection: {}", e);
                         return;
