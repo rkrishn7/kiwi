@@ -37,7 +37,7 @@ futures-util = "0.3.30"
 http = "1.0.0"
 notify = "6.1.1"
 arc-swap = "1.7.0"
-fastwebsockets = { version = "0.7.0", features = ["with_axum", "upgrade"] }
+fastwebsockets = { version = "0.7.0", features = ["upgrade"] }
 http-body-util = "0.1.1"
 hyper = "1.2.0"
 hyper-util = { version = "0.1.3", features = ["server", "http1", "http2"] }
