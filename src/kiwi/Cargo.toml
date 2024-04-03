@@ -34,7 +34,7 @@ wit-component = "0.20.1"
 ringbuf = "0.3.3"
 async-stream = "0.3.5"
 futures-util = "0.3.30"
-http = "1.0.0"
+http = "1.1.0"
 notify = "6.1.1"
 arc-swap = "1.7.0"
 fastwebsockets = { version = "0.7.0", features = ["upgrade"] }
