@@ -4,8 +4,6 @@
 
 Kiwi is a WebSocket adapter for real-time data sources. It implements a simple protocol for clients to subscribe to configured sources, while allowing operators to maintain control over the flow of data via [WebAssembly](https://webassembly.org/) (WASM) plugins. Kiwi is designed to be a lightweight, extensible, and secure solution for delivering real-time data to clients, ensuring that they stay reactive and up-to-date with the latest data.
 
-***NOTE***: Kiwi is currently in active development and is not yet recommended for production use.
-
 - [🥝 Kiwi - Extensible Real-Time Data Streaming](#-kiwi---extensible-real-time-data-streaming)
   - [Features](#features)
   - [Motivation](#motivation)
@@ -105,4 +103,3 @@ Kiwi is designed as a real-time event notification service, leveraging WebAssemb
 Kiwi excels at handling event-driven communication with efficient backpressure management, making it suitable for real-time messaging and lightweight data transformation tasks. However, users requiring advanced stream processing capabilities—such as complex event processing (CEP), stateful computations, windowing, and aggregation over unbounded datasets—are encouraged to use specialized stream processing systems.
 
 Kiwi is designed to be a part of a broader architecture where it can work in conjunction with such systems, rather than serve as a standalone solution for high-throughput data processing needs.
-
