@@ -103,6 +103,12 @@ server:
   #
   ## Required
   address: '127.0.0.1:8000'
+
+  # Whether to enable the health check endpoint at `/health`
+  #
+  ## Optional (default: true)
+  healthcheck: true
+
   # TLS Configuration
   #
   ## Optional
