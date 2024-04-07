@@ -1,20 +1,22 @@
-# 🥝 Kiwi - Extensible Real-Time Data Streaming
+<div align="center">
+<img src="assets/kiwi-bird.png" alt="drawing" width="200"/>
+<h1 align="center">Kiwi - Extensible Real-Time Data Streaming</h1>
 
 [![test](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/test.yml) [![check](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml/badge.svg)](https://github.com/rkrishn7/kiwi/actions/workflows/check.yml) [![CircleCI](https://dl.circleci.com/status-badge/img/gh/rkrishn7/kiwi/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/rkrishn7/kiwi/tree/main) ![contributions](https://img.shields.io/badge/contributions-welcome-green)
+</div>
 
 Kiwi is a WebSocket adapter for real-time data sources. It implements a simple protocol for clients to subscribe to configured sources, while allowing operators to maintain control over the flow of data via [WebAssembly](https://webassembly.org/) (WASM) plugins. Kiwi is designed to be a lightweight, extensible, and secure solution for delivering real-time data to clients, ensuring that they stay reactive and up-to-date with the latest data.
 
-- [🥝 Kiwi - Extensible Real-Time Data Streaming](#-kiwi---extensible-real-time-data-streaming)
-  - [Features](#features)
-  - [Motivation](#motivation)
-  - [Getting Started](#getting-started)
-  - [Plugins](#plugins)
-  - [Sources](#sources)
-    - [Kafka](#kafka)
-    - [Counter](#counter)
-  - [Protocol](#protocol)
-  - [Configuration](#configuration)
-  - [Considerations](#considerations)
+- [Features](#features)
+- [Motivation](#motivation)
+- [Getting Started](#getting-started)
+- [Plugins](#plugins)
+- [Sources](#sources)
+  - [Kafka](#kafka)
+  - [Counter](#counter)
+- [Protocol](#protocol)
+- [Configuration](#configuration)
+- [Considerations](#considerations)
 
 ## Features
 
