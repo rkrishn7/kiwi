@@ -29,7 +29,7 @@ tracing-subscriber = "0.3.18"
 wasmtime = { version = "18.0.2", features = ["component-model", "async"] }
 wasmtime-wasi = "18.0.2"
 wasmtime-wasi-http = "18.0.2"
-wat = "1.0.85"
+wat = "1.207.0"
 wit-component = "0.20.1"
 ringbuf = "0.3.3"
 async-stream = "0.3.5"
