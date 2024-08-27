@@ -26,6 +26,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["sync"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
+wasi-preview1-component-adapter-provider = "24.0.0"
 wasmtime = { version = "18.0.2", features = ["component-model", "async"] }
 wasmtime-wasi = "18.0.2"
 wasmtime-wasi-http = "18.0.2"

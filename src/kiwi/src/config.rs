@@ -88,7 +88,6 @@ impl Kafka {
 pub struct Hooks {
     pub intercept: Option<String>,
     pub authenticate: Option<String>,
-    pub __adapter_path: Option<String>,
 }
 
 /// Server configuration
@@ -159,10 +158,8 @@ async fn watch_path_with_delay(
 
 /// Recompiles the specified hook from its cached file path and adapter path
 fn reload_hook<T: WasmHook>(hook: &Arc<ArcSwapOption<T>>) -> anyhow::Result<()> {
-    if let Some((module_path, adapter_path)) =
-        hook.load().as_ref().map(|h| (h.path(), h.adapter_path()))
-    {
-        hook.store(Some(Arc::new(T::from_file(module_path, adapter_path)?)));
+    if let Some(module_path) = hook.load().as_ref().map(|h| h.path()) {
+        hook.store(Some(Arc::new(T::from_file(module_path)?)));
         tracing::info!("Recompiled hook at {:?}", module_path);
     }
 
@@ -174,7 +171,6 @@ fn reload_hook<T: WasmHook>(hook: &Arc<ArcSwapOption<T>>) -> anyhow::Result<()> 
 fn reconcile_hook<T: WasmHook>(
     hook: &Arc<ArcSwapOption<T>>,
     module_path: Option<&String>,
-    adapter_path: Option<&String>,
 ) -> anyhow::Result<()> {
     if let Some(path) = module_path {
         if let Some(last_known_path) = hook.load().as_ref().map(|h| h.path()) {
@@ -186,12 +182,12 @@ fn reconcile_hook<T: WasmHook>(
             // on the old path. While unlikely the path will be updated frequently, it is
             // still something to clean up.
             if last_known_path != updated_path {
-                hook.store(Some(Arc::new(T::from_file(path, adapter_path)?)));
+                hook.store(Some(Arc::new(T::from_file(path)?)));
 
                 tracing::info!("Recompiled hook at {:?}", path);
             }
         } else {
-            hook.store(Some(Arc::new(T::from_file(path, adapter_path)?)));
+            hook.store(Some(Arc::new(T::from_file(path)?)));
 
             tracing::info!("Compiled hook at {:?}", path);
         }
@@ -324,13 +320,8 @@ impl<A: WasmHook, B: KafkaSourceBuilder + CounterSourceBuilder, I: WasmHook>
         let intercept_path = config.hooks.as_ref().and_then(|c| c.intercept.as_ref());
         let authenticate_path = config.hooks.as_ref().and_then(|c| c.authenticate.as_ref());
 
-        let adapter_path = config
-            .hooks
-            .as_ref()
-            .and_then(|c| c.__adapter_path.as_ref());
-
-        reconcile_hook(&self.intercept, intercept_path, adapter_path)?;
-        reconcile_hook(&self.authenticate, authenticate_path, adapter_path)?;
+        reconcile_hook(&self.intercept, intercept_path)?;
+        reconcile_hook(&self.authenticate, authenticate_path)?;
 
         Ok(())
     }
@@ -615,19 +606,12 @@ mod tests {
     struct TestWasmHook;
 
     impl WasmHook for TestWasmHook {
-        fn from_file<P: AsRef<Path>>(
-            _path: P,
-            _adapter_path: Option<P>,
-        ) -> Result<Self, anyhow::Error> {
+        fn from_file<P: AsRef<Path>>(_path: P) -> Result<Self, anyhow::Error> {
             Ok(Self)
         }
 
         fn path(&self) -> &Path {
             "test".as_ref()
-        }
-
-        fn adapter_path(&self) -> Option<&Path> {
-            None
         }
     }
 
@@ -899,7 +883,6 @@ mod tests {
             hooks: Some(Hooks {
                 intercept: Some("test".into()),
                 authenticate: Some("test".into()),
-                __adapter_path: None,
             }),
             server: Server {
                 address: "127.0.0.1:8000".into(),

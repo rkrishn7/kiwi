@@ -92,7 +92,7 @@ checksum = "b1a46d1a171d865aa5f83f92695765caa047a9b4cbae2cbf37dbd613a793fd4c"
 
 [[package]]
 name = "kiwi-macro"
-version = "0.1.1-alpha.7"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "kiwi-sdk"
-version = "0.1.1-alpha.7"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "http",

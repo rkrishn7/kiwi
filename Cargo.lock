@@ -1410,6 +1410,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "wasi-preview1-component-adapter-provider",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -2950,6 +2951,12 @@ dependencies = [
  "wiggle",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "wasi-preview1-component-adapter-provider"
+version = "24.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36e6cadfa74538edd5409b6f8c79628436529138e9618b7373bec7aae7805835"
 
 [[package]]
 name = "wasm-bindgen"
