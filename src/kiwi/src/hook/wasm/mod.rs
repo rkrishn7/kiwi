@@ -3,9 +3,10 @@ use std::path::Path;
 use async_trait::async_trait;
 use http::Request as HttpRequest;
 use once_cell::sync::Lazy;
+use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER;
 use wasmtime::component::{Component, InstancePre, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::preview2::{self, Stdout, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{Stdout, WasiCtx, WasiCtxBuilder, WasiImpl, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use anyhow::Context;
@@ -13,10 +14,10 @@ use wit_component::ComponentEncoder;
 
 use super::authenticate;
 use super::authenticate::types::{Authenticate, Outcome};
+use super::authenticate::wasm::bindgen::AuthenticateHookPre;
 use super::intercept;
 use super::intercept::types::Intercept;
-
-const DEFAULT_ADAPTER_PATH: &str = "/etc/kiwi/wasi/wasi_snapshot_preview1.wasm";
+use super::intercept::wasm::bindgen::InterceptHookPre;
 
 static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
@@ -27,17 +28,14 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 
 /// Encode a WebAssembly module into a component suitable for execution in the
 /// Kiwi hook runtime.
-pub fn encode_component<P: AsRef<Path>>(input: P, adapter: Option<P>) -> anyhow::Result<Vec<u8>> {
+pub fn encode_component<P: AsRef<Path>>(input: P) -> anyhow::Result<Vec<u8>> {
     let parsed = wat::parse_file(input).context("failed to parse wat")?;
-    let adapter_path: &Path = adapter
-        .as_ref()
-        .map(|p| p.as_ref())
-        .unwrap_or(Path::new(DEFAULT_ADAPTER_PATH));
-
-    let adapter = wat::parse_file(adapter_path).context("failed to parse adapter")?;
 
     let mut encoder = ComponentEncoder::default().validate(true).module(&parsed)?;
-    encoder = encoder.adapter("wasi_snapshot_preview1", &adapter)?;
+    encoder = encoder.adapter(
+        "wasi_snapshot_preview1",
+        WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER,
+    )?;
 
     encoder.encode().context("failed to encode component")
 }
@@ -68,35 +66,20 @@ impl WasiView for Host {
     }
 }
 
-impl authenticate::wasm::bindgen::kiwi::kiwi::authenticate_types::Host for Host {}
+impl authenticate::wasm::bindgen::kiwi::kiwi::authenticate_types::Host for WasiImpl<Host> {}
 impl intercept::wasm::bindgen::kiwi::kiwi::intercept_types::Host for Host {}
 
-pub(super) fn get_linker(typ: WasmHookType) -> anyhow::Result<Linker<Host>> {
+pub(super) fn get_linker() -> anyhow::Result<Linker<Host>> {
     let mut linker = Linker::new(&ENGINE);
-    preview2::command::add_to_linker(&mut linker)?;
-
-    if typ == WasmHookType::Authenticate {
-        wasmtime_wasi_http::proxy::add_only_http_to_linker(&mut linker)?;
-        authenticate::wasm::bindgen::AuthenticateHook::add_to_linker(
-            &mut linker,
-            |state: &mut Host| state,
-        )?;
-    } else {
-        intercept::wasm::bindgen::InterceptHook::add_to_linker(&mut linker, |state: &mut Host| {
-            state
-        })?;
-    }
+    wasmtime_wasi::add_to_linker_async(&mut linker)?;
+    wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)?;
 
     Ok(linker)
 }
 
-pub(super) fn create_instance_pre<P: AsRef<Path>>(
-    typ: WasmHookType,
-    file: P,
-    adapter: Option<P>,
-) -> anyhow::Result<InstancePre<Host>> {
-    let linker = get_linker(typ)?;
-    let bytes = encode_component(file, adapter)?;
+pub(super) fn create_instance_pre<P: AsRef<Path>>(file: P) -> anyhow::Result<InstancePre<Host>> {
+    let linker = get_linker()?;
+    let bytes = encode_component(file)?;
     let component = Component::from_binary(&ENGINE, &bytes)?;
 
     let instance_pre = linker.instantiate_pre(&component)?;
@@ -106,75 +89,49 @@ pub(super) fn create_instance_pre<P: AsRef<Path>>(
 
 pub trait WasmHook {
     /// Create a new instance of the hook from a file
-    fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self>
+    fn from_file<P: AsRef<Path>>(file: P) -> anyhow::Result<Self>
     where
         Self: Sized;
     /// Path to the WebAssembly module
     fn path(&self) -> &std::path::Path;
-    /// Path to the adapter module
-    fn adapter_path(&self) -> Option<&std::path::Path>;
 }
 
 pub struct WasmAuthenticateHook {
-    instance_pre: InstancePre<Host>,
+    instance_pre: AuthenticateHookPre<Host>,
     path: std::path::PathBuf,
-    adapter_path: Option<std::path::PathBuf>,
 }
 
 impl WasmHook for WasmAuthenticateHook {
-    fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
+    fn from_file<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
         let path = file.as_ref().to_path_buf();
-        let adapter_path = adapter.as_ref().map(|p| p.as_ref().to_path_buf());
-        let instance_pre = create_instance_pre(WasmHookType::Authenticate, file, adapter)?;
+        let instance_pre = create_instance_pre(file)?;
+        let instance_pre = AuthenticateHookPre::new(instance_pre)?;
 
-        Ok(Self {
-            instance_pre,
-            path,
-            adapter_path,
-        })
+        Ok(Self { instance_pre, path })
     }
 
     fn path(&self) -> &std::path::Path {
         &self.path
-    }
-
-    fn adapter_path(&self) -> Option<&std::path::Path> {
-        self.adapter_path.as_deref()
     }
 }
 
 pub struct WasmInterceptHook {
-    instance_pre: InstancePre<Host>,
+    instance_pre: InterceptHookPre<Host>,
     path: std::path::PathBuf,
-    adapter_path: Option<std::path::PathBuf>,
 }
 
 impl WasmHook for WasmInterceptHook {
-    fn from_file<P: AsRef<Path>>(file: P, adapter: Option<P>) -> anyhow::Result<Self> {
+    fn from_file<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
         let path = file.as_ref().to_path_buf();
-        let adapter_path = adapter.as_ref().map(|p| p.as_ref().to_path_buf());
-        let instance_pre = create_instance_pre(WasmHookType::Intercept, file, adapter)?;
+        let instance_pre = create_instance_pre(file)?;
+        let instance_pre = InterceptHookPre::new(instance_pre)?;
 
-        Ok(Self {
-            instance_pre,
-            path,
-            adapter_path,
-        })
+        Ok(Self { instance_pre, path })
     }
 
     fn path(&self) -> &std::path::Path {
         &self.path
     }
-
-    fn adapter_path(&self) -> Option<&std::path::Path> {
-        self.adapter_path.as_deref()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WasmHookType {
-    Authenticate,
-    Intercept,
 }
 
 #[async_trait]
@@ -187,16 +144,12 @@ impl Authenticate for WasmAuthenticateHook {
         let state = Host {
             table: ResourceTable::new(),
             wasi: builder.build(),
-            http: WasiHttpCtx,
+            http: WasiHttpCtx::new(),
         };
 
         let mut store = Store::new(&ENGINE, state);
 
-        let (bindings, _) = authenticate::wasm::bindgen::AuthenticateHook::instantiate_pre(
-            &mut store,
-            &self.instance_pre,
-        )
-        .await?;
+        let bindings = self.instance_pre.instantiate_async(&mut store).await?;
 
         let res = bindings
             .call_authenticate(&mut store, &request.into())
@@ -219,15 +172,11 @@ impl Intercept for WasmInterceptHook {
             Host {
                 table: ResourceTable::new(),
                 wasi: builder.build(),
-                http: WasiHttpCtx,
+                http: WasiHttpCtx::new(),
             },
         );
 
-        let (bindings, _) = intercept::wasm::bindgen::InterceptHook::instantiate_pre(
-            &mut store,
-            &self.instance_pre,
-        )
-        .await?;
+        let bindings = self.instance_pre.instantiate_async(&mut store).await?;
 
         let res = bindings
             .call_intercept(&mut store, &ctx.clone().into())

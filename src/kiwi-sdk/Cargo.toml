@@ -1,8 +1,8 @@
 [package]
 name = "kiwi-sdk"
 version = "0.1.1"
+rust-version = "1.71.1"
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
