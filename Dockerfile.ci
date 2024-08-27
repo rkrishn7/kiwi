@@ -1,4 +1,4 @@
-FROM rust:1.73.0-buster as builder
+FROM rust:1.80.0-buster as builder
 WORKDIR /app
 
 # Install cmake (Required to build librdkafka)
