@@ -26,10 +26,10 @@ Before writing any code, ensure that crate type is specified as `cdylib` in the 
 crate-type = ["cdylib"]
 ```
 
-**Note**: The plugin must be built with the  `--target` flag set to `wasm32-wasi`
+**Note**: The plugin must be built with the  `--target` flag set to `wasm32-wasip1`
 
 ```sh
-cargo build --target wasm32-wasi
+cargo build --target wasm32-wasip1
 ```
 
 Nice! You're ready to start writing your plugin. Take a look in the [examples](../examples) directory for Kiwi plugin samples.

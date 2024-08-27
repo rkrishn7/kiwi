@@ -15,19 +15,19 @@ This example highlights how to write a simple WebAssembly (WASM) hook using the 
 
 ### Building the WASM Hook
 
-The `wasm32-wasi` target is required to build the WASM hook. This target is not installed by default, so it must be added using the following command:
+The `wasm32-wasip1` target is required to build the WASM hook. This target is not installed by default, so it must be added using the following command:
 
 ```sh
-rustup target add wasm32-wasi
+rustup target add wasm32-wasip1
 ```
 
 Once the target is installed, the WASM hook can be built using the following command:
 
 ```sh
-cargo build --target wasm32-wasi
+cargo build --target wasm32-wasip1
 ```
 
-This command will produce the WASM hook at `target/wasm32-wasi/debug/intercept.wasm`.
+This command will produce the WASM hook at `target/wasm32-wasip1/debug/intercept.wasm`.
 
 ### Running Kiwi
 
@@ -35,7 +35,7 @@ Now that the WASM hook is built, it can be run with Kiwi. The following command 
 
 ```sh
 docker run -p 8000:8000 -v $(pwd)/kiwi.yml:/etc/kiwi/config/kiwi.yml \
-    -v $(pwd)/target/wasm32-wasi/debug/intercept.wasm:/etc/kiwi/hook/intercept.wasm \
+    -v $(pwd)/target/wasm32-wasip1/debug/intercept.wasm:/etc/kiwi/hook/intercept.wasm \
     ghcr.io/rkrishn7/kiwi:main
 ```
 

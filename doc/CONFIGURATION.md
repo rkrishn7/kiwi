@@ -16,13 +16,13 @@ hooks:
   # to the intercept hook.
   #
   ## Optional (default: null)
-  authenticate: 'my-authenticate-hook/target/wasm32-wasi/debug/authenticate_http.wasm'
+  authenticate: 'my-authenticate-hook/target/wasm32-wasip1/debug/authenticate_http.wasm'
 
   # This plugin executes once Kiwi ingest's the source event, but before it decides whether to
   # forward the event to any of the source's subscribers.
   #
   ## Optional (default: null)
-  intercept: 'my-intercept-hook/target/wasm32-wasi/debug/intercept.wasm'
+  intercept: 'my-intercept-hook/target/wasm32-wasip1/debug/intercept.wasm'
 
 # Source Configuration
 #
