@@ -6,7 +6,7 @@ use once_cell::sync::Lazy;
 use wasi_preview1_component_adapter_provider::WASI_SNAPSHOT_PREVIEW1_REACTOR_ADAPTER;
 use wasmtime::component::{Component, InstancePre, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::preview2::{self, Stdout, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{Stdout, WasiCtx, WasiCtxBuilder, WasiImpl, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use anyhow::Context;
@@ -14,8 +14,10 @@ use wit_component::ComponentEncoder;
 
 use super::authenticate;
 use super::authenticate::types::{Authenticate, Outcome};
+use super::authenticate::wasm::bindgen::AuthenticateHookPre;
 use super::intercept;
 use super::intercept::types::Intercept;
+use super::intercept::wasm::bindgen::InterceptHookPre;
 
 static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
@@ -64,33 +66,19 @@ impl WasiView for Host {
     }
 }
 
-impl authenticate::wasm::bindgen::kiwi::kiwi::authenticate_types::Host for Host {}
+impl authenticate::wasm::bindgen::kiwi::kiwi::authenticate_types::Host for WasiImpl<Host> {}
 impl intercept::wasm::bindgen::kiwi::kiwi::intercept_types::Host for Host {}
 
-pub(super) fn get_linker(typ: WasmHookType) -> anyhow::Result<Linker<Host>> {
+pub(super) fn get_linker() -> anyhow::Result<Linker<Host>> {
     let mut linker = Linker::new(&ENGINE);
-    preview2::command::add_to_linker(&mut linker)?;
-
-    if typ == WasmHookType::Authenticate {
-        wasmtime_wasi_http::proxy::add_only_http_to_linker(&mut linker)?;
-        authenticate::wasm::bindgen::AuthenticateHook::add_to_linker(
-            &mut linker,
-            |state: &mut Host| state,
-        )?;
-    } else {
-        intercept::wasm::bindgen::InterceptHook::add_to_linker(&mut linker, |state: &mut Host| {
-            state
-        })?;
-    }
+    wasmtime_wasi::add_to_linker_async(&mut linker)?;
+    wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)?;
 
     Ok(linker)
 }
 
-pub(super) fn create_instance_pre<P: AsRef<Path>>(
-    typ: WasmHookType,
-    file: P,
-) -> anyhow::Result<InstancePre<Host>> {
-    let linker = get_linker(typ)?;
+pub(super) fn create_instance_pre<P: AsRef<Path>>(file: P) -> anyhow::Result<InstancePre<Host>> {
+    let linker = get_linker()?;
     let bytes = encode_component(file)?;
     let component = Component::from_binary(&ENGINE, &bytes)?;
 
@@ -109,14 +97,15 @@ pub trait WasmHook {
 }
 
 pub struct WasmAuthenticateHook {
-    instance_pre: InstancePre<Host>,
+    instance_pre: AuthenticateHookPre<Host>,
     path: std::path::PathBuf,
 }
 
 impl WasmHook for WasmAuthenticateHook {
     fn from_file<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
         let path = file.as_ref().to_path_buf();
-        let instance_pre = create_instance_pre(WasmHookType::Authenticate, file)?;
+        let instance_pre = create_instance_pre(file)?;
+        let instance_pre = AuthenticateHookPre::new(instance_pre)?;
 
         Ok(Self { instance_pre, path })
     }
@@ -127,14 +116,15 @@ impl WasmHook for WasmAuthenticateHook {
 }
 
 pub struct WasmInterceptHook {
-    instance_pre: InstancePre<Host>,
+    instance_pre: InterceptHookPre<Host>,
     path: std::path::PathBuf,
 }
 
 impl WasmHook for WasmInterceptHook {
     fn from_file<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
         let path = file.as_ref().to_path_buf();
-        let instance_pre = create_instance_pre(WasmHookType::Intercept, file)?;
+        let instance_pre = create_instance_pre(file)?;
+        let instance_pre = InterceptHookPre::new(instance_pre)?;
 
         Ok(Self { instance_pre, path })
     }
@@ -142,12 +132,6 @@ impl WasmHook for WasmInterceptHook {
     fn path(&self) -> &std::path::Path {
         &self.path
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WasmHookType {
-    Authenticate,
-    Intercept,
 }
 
 #[async_trait]
@@ -160,16 +144,12 @@ impl Authenticate for WasmAuthenticateHook {
         let state = Host {
             table: ResourceTable::new(),
             wasi: builder.build(),
-            http: WasiHttpCtx,
+            http: WasiHttpCtx::new(),
         };
 
         let mut store = Store::new(&ENGINE, state);
 
-        let (bindings, _) = authenticate::wasm::bindgen::AuthenticateHook::instantiate_pre(
-            &mut store,
-            &self.instance_pre,
-        )
-        .await?;
+        let bindings = self.instance_pre.instantiate_async(&mut store).await?;
 
         let res = bindings
             .call_authenticate(&mut store, &request.into())
@@ -192,15 +172,11 @@ impl Intercept for WasmInterceptHook {
             Host {
                 table: ResourceTable::new(),
                 wasi: builder.build(),
-                http: WasiHttpCtx,
+                http: WasiHttpCtx::new(),
             },
         );
 
-        let (bindings, _) = intercept::wasm::bindgen::InterceptHook::instantiate_pre(
-            &mut store,
-            &self.instance_pre,
-        )
-        .await?;
+        let bindings = self.instance_pre.instantiate_async(&mut store).await?;
 
         let res = bindings
             .call_intercept(&mut store, &ctx.clone().into())
