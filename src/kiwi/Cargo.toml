@@ -31,7 +31,7 @@ wasmtime = { version = "24.0.0", features = ["component-model", "async"] }
 wasmtime-wasi = "24.0.0"
 wasmtime-wasi-http = "24.0.0"
 wat = "1.0.85"
-wit-component = "0.20.1"
+wit-component = "0.201.0"
 ringbuf = "0.3.3"
 async-stream = "0.3.5"
 futures-util = "0.3.30"
