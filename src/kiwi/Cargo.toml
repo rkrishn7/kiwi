@@ -30,7 +30,7 @@ wasi-preview1-component-adapter-provider = "24.0.0"
 wasmtime = { version = "24.0.0", features = ["component-model", "async"] }
 wasmtime-wasi = "24.0.0"
 wasmtime-wasi-http = "24.0.0"
-wat = "1.0.85"
+wat = "1.218.0"
 wit-component = "0.20.1"
 ringbuf = "0.3.3"
 async-stream = "0.3.5"
